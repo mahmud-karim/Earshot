@@ -1,0 +1,72 @@
+name: Build
+
+# Builds the unsigned IPA that LiveContainer installs. No secrets and no signing identity are used.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+
+jobs:
+  ipa:
+    name: Unsigned IPA
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show the toolchain
+        run: |
+          if [[ ! -d "$DEVELOPER_DIR" ]]; then
+            echo "::error::$DEVELOPER_DIR is missing. Installed:"; ls -d /Applications/Xcode*.app; exit 1
+          fi
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Generate the Xcode project
+        run: |
+          command -v xcodegen >/dev/null || HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
+          xcodegen generate
+
+      - name: Build for devices, unsigned
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          xcodebuild build \
+            -project Earshot.xcodeproj -scheme Earshot -configuration Release \
+            -sdk iphoneos -destination "generic/platform=iOS" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            2>&1 | tee artifacts/xcodebuild.log | grep -E "error:|warning: unre|BUILD (SUCCEEDED|FAILED)" || true
+          grep -q "BUILD SUCCEEDED" artifacts/xcodebuild.log
+
+      - name: Show compile errors
+        if: failure()
+        run: grep -E "error:" artifacts/xcodebuild.log | sort -u | head -100 || true
+
+      - name: Package the IPA
+        run: |
+          app="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/Earshot.app"
+          mkdir -p "$RUNNER_TEMP/Package/Payload"
+          ditto "$app" "$RUNNER_TEMP/Package/Payload/Earshot.app"
+          (cd "$RUNNER_TEMP/Package" && zip -q -r -y -X "$GITHUB_WORKSPACE/artifacts/Earshot.ipa" Payload)
+          ls -la artifacts
+
+      - name: Upload
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: earshot-ipa
+          path: artifacts/
+          retention-days: 14

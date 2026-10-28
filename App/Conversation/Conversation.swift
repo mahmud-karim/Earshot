@@ -117,8 +117,7 @@ final class Conversation: ObservableObject {
     private var interruptSeconds = 0.0
     /// How long the microphone has given pure digital silence while listening.
     private var deadSeconds = 0.0
-    private var restartedThisListen = false
-    private var lastProbe = Date.distantPast
+    private var restartsThisTurn = 0
 
     /// Listens while a reply is spoken, to notice the user talking over it.
     private var interruptListener: Transcriber?
@@ -186,7 +185,7 @@ final class Conversation: ObservableObject {
         heard = false
         voicedSeconds = 0
         deadSeconds = 0
-        restartedThisListen = false
+        restartsThisTurn = 0
         listenStart = Date()
         lastVoice = Date()
         phase = .listening
@@ -264,20 +263,17 @@ final class Conversation: ObservableObject {
         }
 
         let now = Date()
-        if phase == .listening && !paused {
-            // Real rooms are never exactly silent; zeros mean the input is not live.
+        if (phase == .listening && !paused) || phase == .thinking {
+            // With voice processing on, the input of a freshly started engine can stay at exact
+            // zeros until the engine is restarted once (seen on iOS 27). A live microphone, even in
+            // a quiet room, is never exactly zero, so a third of a second of zeros means restart.
             deadSeconds = level <= -99.9 ? deadSeconds + seconds : 0
-            let sinceStart = now.timeIntervalSince(listenStart)
-            if sinceStart < 4, now.timeIntervalSince(lastProbe) > 0.25 {
-                lastProbe = now
-                talkLog.notice("probe \(sinceStart, format: .fixed(precision: 2))s level \(level, format: .fixed(precision: 1)) dead \(self.deadSeconds, format: .fixed(precision: 2))")
-            }
-            if deadSeconds > 3.0 && !restartedThisListen {
-                restartedThisListen = true
+            if deadSeconds > 0.3 && restartsThisTurn < 2 {
+                restartsThisTurn += 1
                 deadSeconds = 0
-                talkLog.notice("microphone gives only silence; restarting the audio engine")
+                talkLog.notice("microphone gives only zeros; restarting the audio engine")
                 AudioIO.shared.restart()
-                listenStart = now
+                if phase == .listening { listenStart = now }
             }
         }
         switch phase {
@@ -380,6 +376,8 @@ final class Conversation: ObservableObject {
         reply = ""
         spokenText = ""
         replyModel = label
+        deadSeconds = 0
+        restartsThisTurn = 0
         phase = .thinking
 
         replyTask = Task { [weak self] in

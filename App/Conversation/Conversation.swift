@@ -1,7 +1,10 @@
 import AVFoundation
 import Foundation
+import os
 import SwiftUI
 import UIKit
+
+let talkLog = Logger(subsystem: "com.mahmudkarim.Earshot", category: "talk")
 
 enum TalkPhase: Equatable {
     case idle, listening, transcribing, thinking, speaking
@@ -97,6 +100,7 @@ final class Conversation: ObservableObject {
     private var spokenText = ""
     /// Loud moments while speaking; the user is close to the phone, the echo and a TV are not.
     private var lastLoud = Date.distantPast
+    private var peakWhileSpeaking: Float = -100
     /// Words of the reply the user interrupted, dropped from the start of what they say next.
     private var echoWords: Set<String> = []
 
@@ -248,6 +252,7 @@ final class Conversation: ObservableObject {
         case .speaking where settings.data.interruptByTalking:
             let loud = level > max(noiseFloor + 15, -40)
             if loud { lastLoud = now }
+            if level > peakWhileSpeaking { peakWhileSpeaking = level }
             // Without live words to check, only a long, loud stretch counts as the user.
             guard interruptListener == nil else { break }
             if level > max(noiseFloor + 25, -28) {
@@ -427,7 +432,9 @@ final class Conversation: ObservableObject {
             guard let self, self.interruptListener === listener, self.phase == .speaking else { return }
             let reply = Conversation.wordSet(self.spokenText)
             let fresh = Conversation.words(text).filter { !reply.contains($0) }
-            if fresh.count >= 2 && Date().timeIntervalSince(self.lastLoud) < 1.0 {
+            let sinceLoud = Date().timeIntervalSince(self.lastLoud)
+            talkLog.notice("under reply heard \(text, privacy: .public) fresh=\(fresh.count) sinceLoud=\(sinceLoud, format: .fixed(precision: 2)) floor=\(self.noiseFloor, format: .fixed(precision: 1))")
+            if fresh.count >= 2 && sinceLoud < 1.0 {
                 self.takeOver(listener, text: text, echo: reply)
             }
         }
@@ -446,6 +453,10 @@ final class Conversation: ObservableObject {
     }
 
     private func disarmInterrupt() {
+        if peakWhileSpeaking > -100 {
+            talkLog.notice("reply over: peak level \(self.peakWhileSpeaking, format: .fixed(precision: 1)) floor \(self.noiseFloor, format: .fixed(precision: 1))")
+            peakWhileSpeaking = -100
+        }
         guard let listener = interruptListener else { return }
         interruptListener = nil
         listener.cancel()

@@ -23,7 +23,7 @@ struct ChatView: View {
                                            meta: meta(turn), retry: retryAction(turn))
                             }
                         }
-                        if conversation.phase == .thinking || conversation.phase == .speaking || !conversation.reply.isEmpty {
+                        if conversation.phase == .thinking || !conversation.reply.isEmpty {
                             ReplyBlock(text: conversation.reply, model: conversation.replyModel, failed: false, meta: nil, retry: nil)
                         }
                         Color.clear.frame(height: 1).id("end")

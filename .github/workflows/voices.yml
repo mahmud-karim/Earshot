@@ -74,14 +74,13 @@ jobs:
           "$RUNNER_TEMP/dd/Build/Products/Release/voice-check" "${{ matrix.model }}" \
             --models "$RUNNER_TEMP/models" --out "$RUNNER_TEMP/out" "${ref[@]}" ${{ inputs.extra }} 2>&1 | tee "$RUNNER_TEMP/out/${{ matrix.model }}-log.txt"
 
-      # The image's python3 is 3.15, which PyAV (a faster-whisper dependency) has no wheel for yet.
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Check the words with Whisper
         run: |
-          python3 -m venv "$RUNNER_TEMP/venv"
+          python -m venv "$RUNNER_TEMP/venv"
           "$RUNNER_TEMP/venv/bin/pip" install -q faster-whisper
           "$RUNNER_TEMP/venv/bin/python" Scripts/check_speech.py "$RUNNER_TEMP/out"
           cat "$RUNNER_TEMP/out/summary.md" >> "$GITHUB_STEP_SUMMARY"

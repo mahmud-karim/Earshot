@@ -251,11 +251,13 @@ struct TextPage: View {
     @Binding var text: String
     @Environment(\.dismiss) private var dismiss
     @State private var draft = ""
+    @FocusState private var focused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             PageHeader(title: title, back: { dismiss() }) { EmptyView() }
             TextField("", text: $draft)
+                .focused($focused)
                 .font(.system(size: 16)).foregroundStyle(Theme.text)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .padding(.horizontal, 14).frame(height: 48)
@@ -268,7 +270,10 @@ struct TextPage: View {
         .padding(20)
         .background(Theme.ground.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
-        .onAppear { draft = text }
+        .onAppear {
+            draft = text
+            focused = true
+        }
     }
 
     private func save() {

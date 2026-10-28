@@ -91,6 +91,15 @@ final class Conversation: ObservableObject {
     private var heard = false
     private var interruptSeconds = 0.0
 
+    /// Listens while a reply is spoken, to notice the user talking over it.
+    private var interruptListener: Transcriber?
+    /// Everything the current reply has said, for telling its own echo from the user.
+    private var spokenText = ""
+    /// Loud moments while speaking; the user is close to the phone, the echo and a TV are not.
+    private var lastLoud = Date.distantPast
+    /// Words of the reply the user interrupted, dropped from the start of what they say next.
+    private var echoWords: Set<String> = []
+
     init(settings: AppSettings, store: ChatStore, spend: SpendMeter) {
         self.settings = settings
         self.store = store
@@ -175,7 +184,8 @@ final class Conversation: ObservableObject {
                 let text = try await current.finish()
                 guard transcriber === current else { return }
                 transcriber = nil
-                let words = text.isEmpty ? liveText : text
+                let words = Conversation.dropEcho(text.isEmpty ? liveText : text, echoWords)
+                echoWords = []
                 guard !words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     phase = .idle
                     liveText = ""
@@ -236,12 +246,16 @@ final class Conversation: ObservableObject {
                 cancelListening()
             }
         case .speaking where settings.data.interruptByTalking:
-            if level > max(noiseFloor + 20, -38) {
+            let loud = level > max(noiseFloor + 15, -40)
+            if loud { lastLoud = now }
+            // Without live words to check, only a long, loud stretch counts as the user.
+            guard interruptListener == nil else { break }
+            if level > max(noiseFloor + 25, -28) {
                 interruptSeconds += seconds
             } else {
                 interruptSeconds = max(0, interruptSeconds - seconds)
             }
-            if interruptSeconds > 0.35 {
+            if interruptSeconds > 0.6 {
                 interruptSeconds = 0
                 startListening(interrupting: true)
             }
@@ -299,6 +313,7 @@ final class Conversation: ObservableObject {
         queue.onStart = { [weak self] in
             guard let self, self.speech === queue, self.phase == .thinking else { return }
             self.phase = .speaking
+            self.armInterrupt()
         }
         queue.onDone = { [weak self] in
             guard let self, self.speech === queue else { return }
@@ -313,6 +328,7 @@ final class Conversation: ObservableObject {
         let model = preset.brain.model
         let chatID = current.id
         reply = ""
+        spokenText = ""
         replyModel = label
         phase = .thinking
 
@@ -329,6 +345,7 @@ final class Conversation: ObservableObject {
                     case .text(let text):
                         if firstWord == nil { firstWord = Date().timeIntervalSince(started) }
                         self.reply += text
+                        self.spokenText += text
                         for sentence in splitter.push(text) { self.speech?.enqueue(sentence) }
                     case .usage(let i, let o):
                         input = i
@@ -378,6 +395,7 @@ final class Conversation: ObservableObject {
 
     /// Stops the reply and its voice, keeping what was written so far.
     private func interruptReply() {
+        disarmInterrupt()
         speech?.stop()
         speech = nil
         replyTask?.cancel()
@@ -386,6 +404,7 @@ final class Conversation: ObservableObject {
     }
 
     private func speechFinished() {
+        disarmInterrupt()
         speech = nil
         if settings.data.handsFree && phase == .speaking {
             phase = .idle
@@ -394,6 +413,91 @@ final class Conversation: ObservableObject {
             phase = .idle
             stopAudioIfIdle()
         }
+    }
+
+    // MARK: - Talking over a reply
+
+    /// Starts listening under the reply. The user has interrupted when it hears words the reply
+    /// did not say, while the room is loud; its own echo repeats the reply's words.
+    private func armInterrupt() {
+        guard settings.data.interruptByTalking, settings.data.ears == .apple, interruptListener == nil else { return }
+        let listener = AppleTranscriber()
+        interruptListener = listener
+        listener.onText = { [weak self] text in
+            guard let self, self.interruptListener === listener, self.phase == .speaking else { return }
+            let reply = Conversation.wordSet(self.spokenText)
+            let fresh = Conversation.words(text).filter { !reply.contains($0) }
+            if fresh.count >= 2 && Date().timeIntervalSince(self.lastLoud) < 1.0 {
+                self.takeOver(listener, text: text, echo: reply)
+            }
+        }
+        Task {
+            do {
+                try await listener.start()
+                guard interruptListener === listener, phase == .speaking else {
+                    listener.cancel()
+                    return
+                }
+                router.attach(listener, withPreroll: false)
+            } catch {
+                if interruptListener === listener { interruptListener = nil }
+            }
+        }
+    }
+
+    private func disarmInterrupt() {
+        guard let listener = interruptListener else { return }
+        interruptListener = nil
+        listener.cancel()
+        if transcriber == nil { router.detach() }
+    }
+
+    /// The user is talking: stop the reply and keep listening with what was already heard.
+    private func takeOver(_ listener: Transcriber, text: String, echo: Set<String>) {
+        interruptListener = nil
+        speech?.stop()
+        speech = nil
+        replyTask?.cancel()
+        replyTask = nil
+        echoWords = echo
+        transcriber = listener
+        transcriberReady = true
+        transcriberGivesLiveText = true
+        listener.onText = { [weak self] text in
+            guard let self, self.transcriber === listener else { return }
+            self.liveText = Conversation.dropEcho(text, self.echoWords)
+            self.lastVoice = Date()
+            if !self.liveText.isEmpty { self.heard = true }
+        }
+        liveText = Conversation.dropEcho(text, echo)
+        paused = false
+        heard = true
+        voicedSeconds = 0
+        listenStart = Date()
+        lastVoice = Date()
+        phase = .listening
+        Haptics.tap()
+    }
+
+    static func words(_ text: String) -> [String] {
+        text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+    }
+
+    static func wordSet(_ text: String) -> Set<String> {
+        Set(words(text))
+    }
+
+    /// Drops the reply's own words from the start of what was heard.
+    static func dropEcho(_ text: String, _ echo: Set<String>) -> String {
+        guard !echo.isEmpty else { return text }
+        let parts = text.split(separator: " ", omittingEmptySubsequences: true)
+        var start = 0
+        while start < parts.count, let word = words(String(parts[start])).first, echo.contains(word) {
+            start += 1
+        }
+        return parts[start...].joined(separator: " ")
     }
 
     private var previewQueue: SpeechQueue?

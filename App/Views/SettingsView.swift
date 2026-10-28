@@ -193,7 +193,7 @@ struct SettingsView: View {
             if status == 200 {
                 let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
                 let count = (object?["data"] as? [Any])?.count ?? 0
-                pcStatus = "Connected · \(count) models"
+                pcStatus = "Connected · \(count) model" + (count == 1 ? "" : "s")
             } else {
                 pcStatus = "Answered with \(status)"
             }

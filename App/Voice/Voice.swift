@@ -209,7 +209,15 @@ enum AppleVoices {
         }
         let voices = english()
         let local = voices.filter { $0.language == AVSpeechSynthesisVoice.currentLanguageCode() }
-        return (local.first(where: { $0.name.hasPrefix("Ava") }) ?? local.first ?? voices.first)
+        let pool = local.isEmpty ? voices : local
+        // The best quality on the phone; among equals, the voices that sound most like an assistant.
+        let preferred = ["Ava", "Zoe", "Evan", "Samantha", "Nathan", "Joelle"]
+        guard let top = pool.first?.quality else { return nil }
+        let best = pool.filter { $0.quality == top }
+        for name in preferred {
+            if let match = best.first(where: { $0.name.hasPrefix(name) }) { return match }
+        }
+        return best.first
     }
 
     static func name(for identifier: String) -> String? {

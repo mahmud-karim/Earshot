@@ -101,7 +101,6 @@ final class Audio8MiniModel: Module, SpeechGenerationModel, @unchecked Sendable 
     let model: Audio8MiniBackbone
     let codec: Audio8MiniCodec
     private var tokenizer: (any Tokenizer)?
-    var float32Codec: Audio8MiniCodec?
 
     var sampleRate: Int { config.codecSampleRate }
     var defaultGenerationParameters: GenerateParameters {
@@ -262,8 +261,7 @@ final class Audio8MiniModel: Module, SpeechGenerationModel, @unchecked Sendable 
             guard reference.size > 0, all(isFinite(reference)).item(Bool.self) else {
                 throw LocalVoiceError("The reference recording is empty or damaged.")
             }
-            referenceCodes = codec.encode(reference.asType(.float32))
-            eval(referenceCodes!)
+            referenceCodes = referenceCodesFor(reference.asType(.float32))
         }
         let prompt = preparePrompt(prefix: prefix, suffix: suffix, referenceCodes: referenceCodes)
         let codes = try generateCodes(prompt: prompt, parameters: parameters)
@@ -272,14 +270,20 @@ final class Audio8MiniModel: Module, SpeechGenerationModel, @unchecked Sendable 
         let audio = codec.decode(codes)
         eval(audio)
         print(String(format: "TRACE decode %ld frames %.3f s, peak %ld MB, active %ld MB", codes.shape[2], Date().timeIntervalSince(decodeStart), Memory.peakMemory / 1_000_000, Memory.activeMemory / 1_000_000))
-        if let float32Codec {
-            // Whole-sequence Float32 decode, the reference for both half precision and chunking.
-            let exact = float32Codec.decoder(float32Codec.quantizer.decode(codes))[0, 0..., 0]
-            let noise = sum(square(exact - audio)).item(Float.self), signal = sum(square(exact)).item(Float.self)
-            print(String(format: "TRACE float16 codec SNR %.1f dB", 10 * log10(signal / max(noise, 1e-12))))
-            self.float32Codec = nil
-        }
         return (audio, prompt.shape[2], codes.shape[2])
+    }
+
+    /// The engine passes the same recording with every sentence, so its codes are kept for the next one.
+    private var lastReference: (audio: MLXArray, codes: MLXArray)?
+
+    private func referenceCodesFor(_ audio: MLXArray) -> MLXArray {
+        if let last = lastReference, last.audio.shape == audio.shape, all(last.audio .== audio).item(Bool.self) {
+            return last.codes
+        }
+        let codes = codec.encode(audio)
+        eval(codes)
+        lastReference = (audio, codes)
+        return codes
     }
 
     func generate(text: String, voice: String?, refAudio: sending MLXArray?, refText: String?, language: String?,
@@ -337,22 +341,14 @@ final class Audio8MiniModel: Module, SpeechGenerationModel, @unchecked Sendable 
             guard weights[key] == nil else { throw LocalVoiceError("Audio8 has the weight \(key) twice.") }
             weights[key] = value
         }
-        // The codec ships in Float32 (1.35 GB). Half precision halves that and its activations, which
-        // decide both the decode time and the peak memory of a sentence.
-        var codecFloat32: [String: MLXArray] = [:]
+        // The codec ships in Float32 (1.35 GB). Half precision halves that and its activations, at
+        // 54 dB SNR against the Float32 decode.
         for (key, value) in weights where key.hasPrefix("codec.") && value.dtype == .float32 {
-            codecFloat32[key] = value
             weights[key] = value.asType(.float16)
         }
         model.codec.computeType = .float16
         try model.update(parameters: ModuleParameters.unflattened(sanitize(weights)), verify: .all)
-        // TEMPORARY: a Float32 codec to measure what half precision costs in quality.
-        let check = Audio8MiniCodec(config)
-        let checkWeights = Dictionary(uniqueKeysWithValues: sanitize(codecFloat32).map { (String($0.key.dropFirst("codec.".count)), $0.value) })
-        try check.update(parameters: ModuleParameters.unflattened(checkWeights), verify: .all)
-        eval(check)
         eval(model)
-        print(String(format: "TRACE loaded, active %ld MB, peak %ld MB", Memory.activeMemory / 1_000_000, Memory.peakMemory / 1_000_000))
         let tokenizer = try await AutoTokenizer.from(modelFolder: directory)
         for (token, expected) in [("<|semantic:0|>", config.semanticBeginID),
                                   ("<|semantic:\(config.codebookSize - 1)|>", config.semanticEndID)] {
@@ -362,21 +358,32 @@ final class Audio8MiniModel: Module, SpeechGenerationModel, @unchecked Sendable 
         }
         model.tokenizer = tokenizer
         model.warmUp()
-        model.float32Codec = check
         return model
     }
 
     /// The first generation compiles the GPU kernels and takes several times longer than the rest.
     /// Audio8 has no built-in voice for the engine's own warm-up, so loading runs every path once
-    /// here: a reference encode and a short prompt with it, then a decode long enough to take every
-    /// chunk shape of `Audio8MiniCodecDecoder.chunked` (the conv kernels differ with size).
+    /// here: a reference long enough to take every chunk shape of the encoder, a short prompt with it,
+    /// then a decode long enough to take every chunk shape of the decoder (conv kernels differ with size).
     private func warmUp() {
-        let silence = MLXArray.zeros([sampleRate])
-        _ = try? run(text: "Hi.", reference: silence, transcript: "Hi.",
+        let seconds = 3.5
+        let time = MLX.arange(Int(seconds * Double(sampleRate)), dtype: .float32) / Float(sampleRate)
+        let tone = 0.3 * sin(2 * Float.pi * 220 * time) + 0.05 * MLXRandom.normal(time.shape, key: MLXRandom.key(0))
+        eval(tone)
+        print(String(format: "TRACE loaded, active %ld MB, peak %ld MB", Memory.activeMemory / 1_000_000, Memory.peakMemory / 1_000_000))
+        // TEMPORARY: chunked against whole-sequence encoding of the same signal.
+        let padded = MLX.padded(tone.asType(.float16).reshaped([1, tone.size, 1]),
+                                widths: [0, .init((0, (2048 - tone.size % 2048) % 2048)), 0])
+        let whole = codec.quantizer.encode(codec.encoder(padded)), pieces = codec.quantizer.encode(codec.encoder.chunked(padded))
+        let differ = sum((whole .!= pieces).asType(.int32)).item(Int32.self)
+        print("TRACE chunked encode: \(differ) of \(whole.size) codes differ")
+        _ = try? run(text: "Hi.", reference: tone, transcript: "Hi.",
                      parameters: .init(maxTokens: 8, temperature: 0.7, topP: 0.9, topK: 50, seed: 0))
         eval(codec.decode(MLXArray.zeros([1, config.numCodebooks, 72], dtype: .int32)))
         benchmarkSteps()
         Memory.clearCache()
+        print(String(format: "TRACE warmed up, active %ld MB, peak %ld MB (reset now)", Memory.activeMemory / 1_000_000, Memory.peakMemory / 1_000_000))
+        Memory.peakMemory = 0
     }
 
     /// TEMPORARY: what one slow step and one frame of fast codebooks cost, building versus running.

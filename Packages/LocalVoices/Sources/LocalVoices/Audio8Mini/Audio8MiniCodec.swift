@@ -88,6 +88,14 @@ final class Audio8MiniCodecEncoderBlock: Module, UnaryLayer {
         block = b
     }
     func callAsFunction(_ x: MLXArray) -> MLXArray { block.reduce(x) { audio8MiniUnary($1, $0) } }
+
+    /// The block up to its closing transformer, if it has one: causal convolutions only.
+    func convolutions(_ x: MLXArray) -> MLXArray {
+        block.filter { !($0 is Audio8MiniCodecTransformer) }.reduce(x) { audio8MiniUnary($1, $0) }
+    }
+    func transformer(_ x: MLXArray) -> MLXArray {
+        block.compactMap { $0 as? Audio8MiniCodecTransformer }.reduce(x) { $1($0) }
+    }
 }
 
 final class Audio8MiniCodecEncoder: Module, UnaryLayer {
@@ -102,6 +110,32 @@ final class Audio8MiniCodecEncoder: Module, UnaryLayer {
         block = b
     }
     func callAsFunction(_ x: MLXArray) -> MLXArray { block.reduce(x) { audio8MiniUnary($1, $0) } }
+
+    /// Input samples per output step: the product of the block strides.
+    static let hop = 2 * 4 * 8 * 8
+
+    /// Encodes `x` (1, samples, 1), a whole number of steps long, running the full-rate convolutions a
+    /// chunk of output steps at a time. They are causal and reach about 6,400 samples (13 steps) back,
+    /// so `context` earlier steps per chunk reproduce the whole-sequence result. Only the last block's
+    /// transformer looks further, and it runs over the whole, low-rate sequence afterwards.
+    func chunked(_ x: MLXArray, chunk: Int = 128, context: Int = 16) -> MLXArray {
+        let steps = x.dim(1) / Self.hop
+        guard steps > chunk else { return self(x) }
+        let blocks = block.compactMap { $0 as? Audio8MiniCodecEncoderBlock }
+        func convolutions(_ x: MLXArray) -> MLXArray {
+            blocks.reduce(audio8MiniUnary(block[0], x)) { $1.convolutions($0) }
+        }
+        var pieces: [MLXArray] = []
+        for start in stride(from: 0, to: steps, by: chunk) {
+            let from = max(0, start - context), end = min(start + chunk, steps)
+            let piece = convolutions(x[0..., (from * Self.hop)..<(end * Self.hop), 0...])[0..., (start - from)..., 0...]
+            // Evaluate now so this chunk's full-rate intermediates are freed before the next one.
+            eval(piece)
+            pieces.append(piece)
+        }
+        let encoded = blocks.reduce(concatenated(pieces, axis: 1)) { $1.transformer($0) }
+        return block.dropFirst(1 + blocks.count).reduce(encoded) { audio8MiniUnary($1, $0) }
+    }
 }
 
 final class Audio8MiniCodecDecoderBlock: Module, UnaryLayer {
@@ -256,7 +290,7 @@ final class Audio8MiniCodec: Module {
     func encode(_ audio: MLXArray) -> MLXArray {
         let waveform = audio.asType(computeType).reshaped([1, audio.size, 1])
         let right = (2048 - audio.size % 2048) % 2048
-        return quantizer.encode(encoder(padded(waveform, widths: [0, .init((0, right)), 0]))).asType(.int32)
+        return quantizer.encode(encoder.chunked(padded(waveform, widths: [0, .init((0, right)), 0]))).asType(.int32)
     }
     func decode(_ codes: MLXArray) -> MLXArray {
         decoder.chunked(quantizer.decode(codes))[0, 0..., 0].asType(.float32)

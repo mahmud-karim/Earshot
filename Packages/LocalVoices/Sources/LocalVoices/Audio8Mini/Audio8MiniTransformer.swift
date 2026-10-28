@@ -7,15 +7,20 @@ import MLX
 import MLXFast
 import MLXNN
 
-/// RMS norm computed in Float32, as the reference does.
+/// RMS norm computed in Float32, as the reference does. Compiled so its elementwise steps run as one
+/// kernel: the fast stack runs it eighty times a frame, and on the GPU those tiny kernels add up.
 final class Audio8MiniNorm: Module, UnaryLayer {
     var weight: MLXArray
     let eps: Float
-    init(_ dim: Int, eps: Float) { self.weight = .ones([dim]); self.eps = eps }
-    func callAsFunction(_ x: MLXArray) -> MLXArray {
-        let f = x.asType(.float32)
-        return (f * rsqrt(mean(f * f, axis: -1, keepDims: true) + eps)).asType(x.dtype) * weight
+    private let normalize: (MLXArray, MLXArray) -> MLXArray
+    init(_ dim: Int, eps: Float) {
+        self.weight = .ones([dim]); self.eps = eps
+        normalize = compile(shapeless: true) { x, weight in
+            let f = x.asType(.float32)
+            return (f * rsqrt(mean(f * f, axis: -1, keepDims: true) + eps)).asType(x.dtype) * weight
+        }
     }
+    func callAsFunction(_ x: MLXArray) -> MLXArray { normalize(x, weight) }
 }
 
 /// Interleaved-pair rotary embedding. Audio8 rounds the table to BF16 before applying it in Float32.
@@ -31,9 +36,15 @@ final class Audio8MiniRoPE {
     }
     func apply(_ x: MLXArray, offset: Int) -> MLXArray {
         let length = x.shape[1], half = x.shape[3] / 2
-        let c = cosine[offset..<(offset + length)].asType(.float32).reshaped([1, length, 1, half])
-        let s = sine[offset..<(offset + length)].asType(.float32).reshaped([1, length, 1, half])
-        let y = x.asType(.float32).reshaped(x.shape.dropLast() + [half, 2])
+        let c = cosine[offset..<(offset + length)].reshaped([1, length, 1, half])
+        let s = sine[offset..<(offset + length)].reshaped([1, length, 1, half])
+        return Self.rotate(x, c, s)
+    }
+
+    /// The rotation itself, compiled into one kernel (it runs on queries and keys of every layer).
+    private static let rotate = compile { (x: MLXArray, cosine: MLXArray, sine: MLXArray) -> MLXArray in
+        let c = cosine.asType(.float32), s = sine.asType(.float32)
+        let y = x.asType(.float32).reshaped(x.shape.dropLast() + [x.shape[3] / 2, 2])
         let a = y[0..., 0..., 0..., 0..., 0], b = y[0..., 0..., 0..., 0..., 1]
         return stacked([a * c - b * s, b * c + a * s], axis: -1).reshaped(x.shape).asType(x.dtype)
     }

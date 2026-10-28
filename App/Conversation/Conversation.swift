@@ -61,12 +61,34 @@ final class AudioRouter {
     }
 }
 
+/// Recent microphone levels for the bars, published about 20 times a second.
+@MainActor
+final class LevelMeter: ObservableObject {
+    @Published private(set) var levels: [Float] = Array(repeating: 0, count: 28)
+    private var peak: Float = 0
+    private var gathered = 0.0
+
+    func add(_ level: Float, seconds: Double) {
+        peak = max(peak, level)
+        gathered += seconds
+        guard gathered >= 0.05 else { return }
+        var next = levels
+        next.removeFirst()
+        next.append(peak)
+        levels = next
+        peak = 0
+        gathered = 0
+    }
+}
+
 /// One conversation at a time: listen, think, speak, and back.
 @MainActor
 final class Conversation: ObservableObject {
     @Published private(set) var phase: TalkPhase = .idle
     @Published private(set) var liveText = ""
-    @Published private(set) var levels: [Float] = Array(repeating: 0, count: 28)
+    /// The microphone bars live in their own object: they change many times a second, and only the
+    /// bars should redraw for that, not every screen that watches the conversation.
+    let meter = LevelMeter()
     @Published var chat: Chat?
     @Published var attachment: Attachment?
     /// The reply while it is being written.
@@ -225,8 +247,7 @@ final class Conversation: ObservableObject {
 
     private func onLevel(_ level: Float, _ seconds: Double) {
         let shown = max(0, min(1, (level + 55) / 45))
-        levels.removeFirst()
-        levels.append(phase == .listening && !paused ? shown : 0)
+        meter.add(phase == .listening && !paused ? shown : 0, seconds: seconds)
 
         if level < noiseFloor {
             noiseFloor = level

@@ -122,6 +122,15 @@ struct LevelBars: View {
     }
 }
 
+/// LevelBars fed by the microphone meter; only this view redraws as the levels change.
+struct MeterBars: View {
+    @ObservedObject var meter: LevelMeter
+
+    var body: some View {
+        LevelBars(levels: meter.levels)
+    }
+}
+
 /// Small grey caption above a grouped list.
 struct GroupLabel: View {
     let text: String

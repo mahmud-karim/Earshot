@@ -28,7 +28,7 @@ struct ListeningView: View {
             Spacer()
             VStack(spacing: 36) {
                 words
-                LevelBars(levels: conversation.levels)
+                MeterBars(meter: conversation.meter)
             }
             Spacer()
 

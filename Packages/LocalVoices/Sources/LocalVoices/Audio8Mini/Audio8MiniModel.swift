@@ -368,11 +368,54 @@ final class Audio8MiniModel: Module, SpeechGenerationModel, @unchecked Sendable 
 
     /// The first generation compiles the GPU kernels and takes several times longer than the rest.
     /// Audio8 has no built-in voice for the engine's own warm-up, so loading runs every path once
-    /// here: a reference encode, a short prompt with that reference, and a decode, capped to a few frames.
+    /// here: a reference encode and a short prompt with it, then a decode long enough to take every
+    /// chunk shape of `Audio8MiniCodecDecoder.chunked` (the conv kernels differ with size).
     private func warmUp() {
         let silence = MLXArray.zeros([sampleRate])
         _ = try? run(text: "Hi.", reference: silence, transcript: "Hi.",
                      parameters: .init(maxTokens: 8, temperature: 0.7, topP: 0.9, topK: 50, seed: 0))
+        eval(codec.decode(MLXArray.zeros([1, config.numCodebooks, 72], dtype: .int32)))
+        benchmarkSteps()
         Memory.clearCache()
+    }
+
+    /// TEMPORARY: what one slow step and one frame of fast codebooks cost, building versus running.
+    private func benchmarkSteps() {
+        let p = defaultGenerationParameters
+        let cache = model.slow.makeCache()
+        var (_, hidden) = model.slowStep(MLXArray.zeros([1, config.numCodebooks + 1, 16], dtype: .int32), cache: cache)
+        eval(hidden)
+        let column = MLXArray.zeros([1, config.numCodebooks + 1, 1], dtype: .int32)
+        var build = 0.0, total = 0.0
+        for _ in 0..<20 {
+            let start = Date()
+            let step = model.slowStep(column, cache: cache)
+            build += Date().timeIntervalSince(start)
+            eval(step.logits, step.hidden)
+            total += Date().timeIntervalSince(start)
+            hidden = step.hidden
+        }
+        print(String(format: "TRACE slow step: build %.1f ms, total %.1f ms", build * 50, total * 50))
+        build = 0; total = 0
+        let semantic = MLXArray([Int32(7)])
+        for i in 0..<20 {
+            let start = Date()
+            let frame = generateCodebooks(hidden: hidden, semantic: semantic, p: p, key: MLXRandom.key(UInt64(i)))
+            build += Date().timeIntervalSince(start)
+            eval(frame)
+            total += Date().timeIntervalSince(start)
+        }
+        print(String(format: "TRACE fast codebooks: build %.1f ms, total %.1f ms", build * 50, total * 50))
+        build = 0; total = 0
+        let logits = MLXRandom.normal([1, config.codebookSize + 1])
+        for i in 0..<20 {
+            let start = Date()
+            let scores = audio8MiniFilteredScores(logits, topK: p.topK, topP: p.topP, temperature: p.temperature)
+            let token = audio8MiniRaceSample(scores, key: MLXRandom.key(UInt64(i)))
+            build += Date().timeIntervalSince(start)
+            eval(token)
+            total += Date().timeIntervalSince(start)
+        }
+        print(String(format: "TRACE one sampling: build %.1f ms, total %.1f ms", build * 50, total * 50))
     }
 }

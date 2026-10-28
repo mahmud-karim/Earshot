@@ -28,7 +28,6 @@ struct ModelsSheet: View {
                             .buttonStyle(.plain)
                     }
                     .padding(.top, 8)
-                    effort
                     brain
                     ears
                     voice
@@ -68,23 +67,33 @@ struct ModelsSheet: View {
 
     // MARK: - Sections
 
-    private var effort: some View {
-        VStack(spacing: 10) {
-            GroupLabel(text: "How hard it thinks")
-            Segmented(options: Effort.allCases.map { ($0, $0.label) }, selection: $settings.preset.effort, height: 40)
-            Text(effortNote).font(.system(size: 14)).foregroundStyle(Theme.muted)
-                .frame(maxWidth: .infinity, alignment: .leading)
+    /// The thinking level picked for a Claude model, or where it starts.
+    private func effort(for model: AnthropicModel) -> Effort {
+        settings.data.effortByModel[model.id] ?? model.defaultEffort
+    }
+
+    /// Under the selected Claude model: how hard it thinks. Each model keeps its own level.
+    private func thinking(_ model: AnthropicModel) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Effort").font(.system(size: 13)).foregroundStyle(Theme.muted)
+            Segmented(options: Effort.allCases.map { ($0, $0.label) },
+                      selection: Binding(get: { settings.preset.effort },
+                                         set: { level in
+                                             settings.preset.effort = level
+                                             settings.data.effortByModel[model.id] = level
+                                         }),
+                      height: 36)
+            Text(effortNote).font(.system(size: 13)).foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .padding(.horizontal, 16).padding(.bottom, 14)
     }
 
     private var effortNote: String {
-        guard settings.preset.brain.kind == .anthropic else {
-            return "Only Claude models use this setting."
-        }
         switch settings.preset.effort {
-        case .low: return "Fast: answers right away with little thinking."
-        case .medium: return "Balanced: thinks a little first. Good for most questions."
-        case .high: return "Deep: thinks it through. Slower, and costs more."
+        case .low: return "Answers right away with little thinking."
+        case .medium: return "Thinks a little first. Good for most questions."
+        case .high: return "Thinks it through. Slower, and costs more."
         }
     }
 
@@ -94,8 +103,14 @@ struct ModelsSheet: View {
             GroupLabel(text: "Brain · what answers")
             RowGroup {
                 ForEach(Catalog.anthropicModels) { model in
-                    row(model.name, "Anthropic · \(model.note)", selected: current.kind == .anthropic && current.model == model.id) {
+                    let selected = current.kind == .anthropic && current.model == model.id
+                    row(model.name, "Anthropic · \(model.note) · \((selected ? settings.preset.effort : effort(for: model)).label) effort",
+                        selected: selected) {
                         settings.preset.brain = BrainChoice(kind: .anthropic, model: model.id)
+                        settings.preset.effort = effort(for: model)
+                    }
+                    if selected {
+                        thinking(model)
                     }
                     Hairline()
                 }

@@ -95,6 +95,8 @@ final class Conversation: ObservableObject {
     /// The reply while it is being written.
     @Published private(set) var reply = ""
     @Published private(set) var replyModel = ""
+    /// The earlier answer being read out again, if any.
+    @Published private(set) var replaying: UUID?
     @Published var error: String?
     @Published private(set) var status: String?
     @Published private(set) var paused = false
@@ -448,6 +450,7 @@ final class Conversation: ObservableObject {
         disarmInterrupt()
         speech?.stop()
         speech = nil
+        replaying = nil
         replyTask?.cancel()
         replyTask = nil
         phase = .idle
@@ -463,6 +466,36 @@ final class Conversation: ObservableObject {
             phase = .idle
             stopAudioIfIdle()
         }
+    }
+
+    /// Reads an earlier answer out loud again, in the voice the preset uses now. It plays like a
+    /// reply, so the stop button and talking over it work the same; it never starts listening after.
+    func replay(_ turn: Turn) {
+        guard phase == .idle, !turn.text.isEmpty else { return }
+        previewQueue?.stop()
+        previewQueue = nil
+        do {
+            try AudioIO.shared.start()
+        } catch {
+            self.error = error.localizedDescription
+            return
+        }
+        let queue = SpeechQueue(synthesizer: makeSynthesizer(settings.preset.voice))
+        queue.onDone = { [weak self] in
+            guard let self, self.speech === queue else { return }
+            self.speech = nil
+            self.replaying = nil
+            if self.phase == .speaking { self.phase = .idle }
+            self.stopAudioIfIdle()
+        }
+        queue.onError = { [weak self] message in self?.error = message }
+        speech = queue
+        replaying = turn.id
+        spokenText = turn.text
+        phase = .speaking
+        var splitter = SentenceSplitter()
+        for sentence in splitter.push(turn.text) + splitter.flush() { queue.enqueue(sentence) }
+        queue.finishInput()
     }
 
     // MARK: - Talking over a reply

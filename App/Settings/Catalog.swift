@@ -32,9 +32,9 @@ enum Effort: String, Codable, CaseIterable {
 
     var label: String {
         switch self {
-        case .low: return "Fast"
-        case .medium: return "Balanced"
-        case .high: return "Deep"
+        case .low: return "Low"
+        case .medium: return "Medium"
+        case .high: return "High"
         }
     }
 }
@@ -85,6 +85,8 @@ struct AnthropicModel: Identifiable {
     let id: String
     let name: String
     let note: String
+    /// The thinking level it starts at until the user picks one.
+    let defaultEffort: Effort
     /// US dollars per million tokens.
     let inputPrice: Double
     let outputPrice: Double
@@ -92,9 +94,9 @@ struct AnthropicModel: Identifiable {
 
 enum Catalog {
     static let anthropicModels: [AnthropicModel] = [
-        AnthropicModel(id: "claude-haiku-5-5", name: "Haiku 5.5", note: "fastest", inputPrice: 0.10, outputPrice: 0.50),
-        AnthropicModel(id: "claude-sonnet-5-5", name: "Sonnet 5.5", note: "balanced", inputPrice: 2, outputPrice: 10),
-        AnthropicModel(id: "claude-opus-5-5", name: "Opus 5.5", note: "deepest thinking", inputPrice: 4, outputPrice: 20)
+        AnthropicModel(id: "claude-haiku-5-5", name: "Haiku 5.5", note: "fastest", defaultEffort: .low, inputPrice: 0.10, outputPrice: 0.50),
+        AnthropicModel(id: "claude-sonnet-5-5", name: "Sonnet 5.5", note: "balanced", defaultEffort: .medium, inputPrice: 2, outputPrice: 10),
+        AnthropicModel(id: "claude-opus-5-5", name: "Opus 5.5", note: "deepest thinking", defaultEffort: .high, inputPrice: 4, outputPrice: 20)
     ]
 
     static let openAIVoices = ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse"]

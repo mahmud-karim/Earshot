@@ -274,7 +274,7 @@ struct PresetPage: View {
                     .font(.system(size: 16)).foregroundStyle(Theme.text)
                     .padding(.horizontal, 14).frame(height: 48)
                     .background(RoundedRectangle(cornerRadius: 12).fill(Theme.surface))
-                Text(settings.data.presets[index].summary + " · " + settings.data.presets[index].effort.label + " thinking")
+                Text(settings.data.presets[index].summary + " · " + settings.data.presets[index].effort.label + " effort")
                     .font(.system(size: 14)).foregroundStyle(Theme.muted)
                 Text("To change its brain or voice, make it current and open Models from the top of the talk screen.")
                     .font(.system(size: 14)).foregroundStyle(Theme.muted)

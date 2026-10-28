@@ -20,11 +20,12 @@ struct ChatView: View {
                                 UserBubble(turn: turn)
                             } else {
                                 ReplyBlock(text: turn.text, model: turn.modelLabel ?? "", failed: turn.failed,
-                                           meta: meta(turn), retry: retryAction(turn))
+                                           meta: meta(turn), retry: retryAction(turn),
+                                           replay: replayControl(turn))
                             }
                         }
                         if conversation.phase == .thinking || !conversation.reply.isEmpty {
-                            ReplyBlock(text: conversation.reply, model: conversation.replyModel, failed: false, meta: nil, retry: nil)
+                            ReplyBlock(text: conversation.reply, model: conversation.replyModel, failed: false, meta: nil, retry: nil, replay: nil)
                         }
                         Color.clear.frame(height: 1).id("end")
                     }
@@ -99,6 +100,16 @@ struct ChatView: View {
         return { conversation.retry() }
     }
 
+    /// Any finished answer can be heard again. While one plays, its button stops it.
+    private func replayControl(_ turn: Turn) -> ReplayControl? {
+        guard !turn.failed, !turn.text.isEmpty else { return nil }
+        let conversation = self.conversation
+        let playing = conversation.replaying == turn.id
+        return ReplayControl(playing: playing, enabled: playing || conversation.phase == .idle) {
+            if playing { conversation.stopSpeaking() } else { conversation.replay(turn) }
+        }
+    }
+
     private func meta(_ turn: Turn) -> String? {
         guard !turn.failed else { return nil }
         var parts: [String] = []
@@ -144,6 +155,7 @@ struct ReplyBlock: View {
     let failed: Bool
     let meta: String?
     let retry: (() -> Void)?
+    let replay: ReplayControl?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -172,8 +184,24 @@ struct ReplyBlock: View {
                     .font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.clay)
                     .buttonStyle(.plain)
             }
-            if let meta {
-                Text(meta).font(.system(size: 12)).foregroundStyle(Theme.muted)
+            if meta != nil || replay != nil {
+                HStack(spacing: 12) {
+                    if let replay {
+                        Button(action: replay.action) {
+                            Label(replay.playing ? "Stop" : "Play again",
+                                  systemImage: replay.playing ? "stop.fill" : "speaker.wave.2")
+                                .font(.system(size: 13)).foregroundStyle(Theme.textBody)
+                                .padding(.horizontal, 12).frame(height: 32)
+                                .background(Capsule().fill(Theme.raised))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!replay.enabled)
+                        .opacity(replay.enabled ? 1 : 0.4)
+                    }
+                    if let meta {
+                        Text(meta).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -209,6 +237,13 @@ struct ReplyBlock: View {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
     }
+}
+
+/// The "Play again" button under an answer.
+struct ReplayControl {
+    let playing: Bool
+    let enabled: Bool
+    let action: () -> Void
 }
 
 struct DraftCard: View {

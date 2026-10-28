@@ -11,6 +11,8 @@ struct SettingsData: Codable, Equatable {
     var openRouterModel = "openai/gpt-5-mini"
     var openAIModel = "gpt-5-mini"
     var pcModel = "llama3.2"
+    /// The thinking level last picked for each Claude model, by model id.
+    var effortByModel: [String: Effort] = [:]
     var openAITranscribeModel = "gpt-4o-mini-transcribe"
     var pcTranscribeModel = "Systran/faster-whisper-small"
     var openAIVoiceModel = "gpt-4o-mini-tts"

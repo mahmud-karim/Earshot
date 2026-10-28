@@ -273,7 +273,8 @@ final class Audio8MiniModel: Module, SpeechGenerationModel, @unchecked Sendable 
         eval(audio)
         print(String(format: "TRACE decode %ld frames %.3f s, peak %ld MB, active %ld MB", codes.shape[2], Date().timeIntervalSince(decodeStart), Memory.peakMemory / 1_000_000, Memory.activeMemory / 1_000_000))
         if let float32Codec {
-            let exact = float32Codec.decode(codes)
+            // Whole-sequence Float32 decode, the reference for both half precision and chunking.
+            let exact = float32Codec.decoder(float32Codec.quantizer.decode(codes))[0, 0..., 0]
             let noise = sum(square(exact - audio)).item(Float.self), signal = sum(square(exact)).item(Float.self)
             print(String(format: "TRACE float16 codec SNR %.1f dB", 10 * log10(signal / max(noise, 1e-12))))
             self.float32Codec = nil

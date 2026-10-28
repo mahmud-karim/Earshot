@@ -124,6 +124,27 @@ final class Audio8MiniCodecDecoder: Module, UnaryLayer {
         model = b
     }
     func callAsFunction(_ x: MLXArray) -> MLXArray { tanh(model.reduce(x) { audio8MiniUnary($1, $0) }) }
+
+    /// Output samples per latent step: the product of the block strides.
+    static let hop = 8 * 8 * 4 * 2
+
+    /// Decodes `x` (1, steps, 1024) a chunk of latent steps at a time. Every layer here is causal and
+    /// together they see about 19 steps back, so giving each chunk `context` earlier steps and dropping
+    /// their samples reproduces the whole-sequence decode, while the large high-rate activations stay
+    /// the size of one chunk however long the sentence is.
+    func chunked(_ x: MLXArray, chunk: Int = 128, context: Int = 32) -> MLXArray {
+        let steps = x.dim(1)
+        guard steps > chunk else { return self(x) }
+        var pieces: [MLXArray] = []
+        for start in stride(from: 0, to: steps, by: chunk) {
+            let from = max(0, start - context), end = min(start + chunk, steps)
+            let piece = self(x[0..., from..<end, 0...])[0..., ((start - from) * Self.hop)..., 0...]
+            // Evaluate now so this chunk's intermediates are freed before the next one is built.
+            eval(piece)
+            pieces.append(piece)
+        }
+        return concatenated(pieces, axis: 1)
+    }
 }
 
 final class Audio8MiniVectorQuantizer: Module {
@@ -238,6 +259,6 @@ final class Audio8MiniCodec: Module {
         return quantizer.encode(encoder(padded(waveform, widths: [0, .init((0, right)), 0]))).asType(.int32)
     }
     func decode(_ codes: MLXArray) -> MLXArray {
-        decoder(quantizer.decode(codes))[0, 0..., 0].asType(.float32)
+        decoder.chunked(quantizer.decode(codes))[0, 0..., 0].asType(.float32)
     }
 }

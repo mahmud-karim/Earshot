@@ -58,7 +58,9 @@ jobs:
 
       - name: Show compile errors
         if: failure()
-        run: grep -E "error:" "$RUNNER_TEMP/build.log" | sort -u | head -100 || true
+        run: |
+          grep -E -A8 "error:" "$RUNNER_TEMP/build.log" | head -150 || true
+          tail -30 "$RUNNER_TEMP/build.log"
 
       - name: Speak
         run: |

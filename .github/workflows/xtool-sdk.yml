@@ -13,7 +13,7 @@ permissions:
 jobs:
   sdk:
     runs-on: macos-26
-    timeout-minutes: 45
+    timeout-minutes: 40
     steps:
       - name: Build the SDK
         env:
@@ -23,10 +23,13 @@ jobs:
           test -n "$KEY"
           curl -fsSL https://github.com/xtool-org/xtool/releases/download/1.24.0/xtool.app.zip -o xtool.zip
           ditto -x -k xtool.zip .
-          XT="$PWD/xtool.app/Contents/MacOS/xtool"
-          "$XT" --version
-          ls -d /Applications/Xcode*.app
-          "$XT" sdk build /Applications/Xcode_26.6.app "$RUNNER_TEMP/sdk" --arch x86_64
+          ls -R xtool.app | head -30
+          XT="$(find "$PWD/xtool.app" -type f -perm -u+x -name xtool | head -1)"
+          echo "binary: $XT"; file "$XT"
+          # A hung step must fail fast rather than eat the job's time.
+          limit() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+          limit 60 "$XT" --version < /dev/null || echo "version exited $?"
+          limit 1800 script -q /dev/null "$XT" sdk build /Applications/Xcode_26.6.app "$RUNNER_TEMP/sdk" --arch x86_64 < /dev/null
           ls -la "$RUNNER_TEMP/sdk"
           tar -C "$RUNNER_TEMP/sdk" -cf - . | zstd -T0 -10 | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:KEY -out "$RUNNER_TEMP/darwin-sdk.tar.zst.enc"
           ls -la "$RUNNER_TEMP/darwin-sdk.tar.zst.enc"

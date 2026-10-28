@@ -7,6 +7,8 @@ struct OnDeviceVoicesPage: View {
     @EnvironmentObject var conversation: Conversation
     @ObservedObject private var downloads = LocalVoiceDownloads.shared
     @Environment(\.dismiss) private var dismiss
+    /// The model the user tapped the trash on. A download is gigabytes, so deleting asks first.
+    @State private var deleting: LocalVoiceModel?
 
     var body: some View {
         ScrollView {
@@ -22,6 +24,16 @@ struct OnDeviceVoicesPage: View {
         }
         .background(Theme.ground.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        .alert(
+            "Delete \(deleting?.info.name ?? "this voice")?",
+            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+            presenting: deleting
+        ) { model in
+            Button("Delete", role: .destructive) { downloads.delete(model) }
+            Button("Cancel", role: .cancel) {}
+        } message: { model in
+            Text("It frees \(Self.size(model.info.approximateBytes)). You can download it again later.")
+        }
     }
 
     private var current: OnDeviceVoice? {
@@ -104,7 +116,7 @@ struct OnDeviceVoicesPage: View {
                 .accessibilityLabel("Stop downloading")
             }
         } else if downloaded {
-            Button { downloads.delete(model) } label: {
+            Button { deleting = model } label: {
                 Image(systemName: "trash").font(.system(size: 13)).foregroundStyle(Theme.muted)
                     .frame(width: 32, height: 32)
             }

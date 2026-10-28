@@ -13,7 +13,9 @@ let package = Package(
     dependencies: [
         // Pinned: the model code moves quickly upstream.
         .package(url: "https://github.com/Blaizzy/mlx-audio-swift.git", revision: "fe2c182f4da8115fe2b6b99c9a4d2048fbf9b1e6"),
-        .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.32.3"))
+        .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.32.3")),
+        // Already in the graph through mlx-audio-swift; named here because Audio8 0.1B loads its tokenizer.
+        .package(url: "https://github.com/huggingface/swift-transformers.git", .upToNextMajor(from: "1.1.6"))
     ],
     targets: [
         .target(
@@ -25,7 +27,8 @@ let package = Package(
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXFast", package: "mlx-swift"),
                 .product(name: "MLXFFT", package: "mlx-swift"),
-                .product(name: "MLXRandom", package: "mlx-swift")
+                .product(name: "MLXRandom", package: "mlx-swift"),
+                .product(name: "Tokenizers", package: "swift-transformers")
             ],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),

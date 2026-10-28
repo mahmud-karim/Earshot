@@ -21,14 +21,12 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$KEY"
-          curl -fsSL https://github.com/xtool-org/xtool/releases/download/1.24.0/xtool.app.zip -o xtool.zip
-          ditto -x -k xtool.zip .
-          ls -R xtool.app | head -30
-          XT="$(find "$PWD/xtool.app" -type f -perm -u+x -name xtool | head -1)"
-          echo "binary: $XT"; file "$XT"
-          # A hung step must fail fast rather than eat the job's time.
+          # The released xtool.app hangs on start here (it carries a provisioning profile), so build the CLI.
+          git clone -q --depth 1 --branch 1.24.0 https://github.com/xtool-org/xtool xtool-src
+          (cd xtool-src && swift build -c release --product xtool 2>&1 | tail -5)
+          XT="$PWD/xtool-src/.build/release/xtool"
           limit() { perl -e 'alarm shift; exec @ARGV' "$@"; }
-          limit 60 "$XT" --version < /dev/null || echo "version exited $?"
+          limit 60 "$XT" --version < /dev/null
           limit 1800 script -q /dev/null "$XT" sdk build /Applications/Xcode_26.6.app "$RUNNER_TEMP/sdk" --arch x86_64 < /dev/null
           ls -la "$RUNNER_TEMP/sdk"
           tar -C "$RUNNER_TEMP/sdk" -cf - . | zstd -T0 -10 | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:KEY -out "$RUNNER_TEMP/darwin-sdk.tar.zst.enc"

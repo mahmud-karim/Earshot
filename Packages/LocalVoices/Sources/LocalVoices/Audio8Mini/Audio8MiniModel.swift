@@ -202,12 +202,7 @@ final class Audio8MiniModel: Module, SpeechGenerationModel, @unchecked Sendable 
         let budget = min(p.maxTokens ?? 512, config.maxSeqLen - width)
         let cache = model.slow.makeCache()
         var key = MLXRandom.key(p.seed ?? UInt64.random(in: 0...UInt64.max))
-        let traceStart = Date()
         var (logits, hidden) = model.slowStep(prompt, cache: cache)
-        eval(logits, hidden)
-        print(String(format: "TRACE prefill %ld tokens %.3f s, peak %ld MB", width, Date().timeIntervalSince(traceStart), Memory.peakMemory / 1_000_000))
-        let loopStart = Date()
-        defer { print(String(format: "TRACE loop %.3f s, peak %ld MB", Date().timeIntervalSince(loopStart), Memory.peakMemory / 1_000_000)) }
         var previous: MLXArray?
         var frames: [MLXArray] = []
         func drawSemantic() -> (semantic: MLXArray, fastKey: MLXArray) {
@@ -265,11 +260,8 @@ final class Audio8MiniModel: Module, SpeechGenerationModel, @unchecked Sendable 
         }
         let prompt = preparePrompt(prefix: prefix, suffix: suffix, referenceCodes: referenceCodes)
         let codes = try generateCodes(prompt: prompt, parameters: parameters)
-        eval(codes)
-        let decodeStart = Date()
         let audio = codec.decode(codes)
         eval(audio)
-        print(String(format: "TRACE decode %ld frames %.3f s, peak %ld MB, active %ld MB", codes.shape[2], Date().timeIntervalSince(decodeStart), Memory.peakMemory / 1_000_000, Memory.activeMemory / 1_000_000))
         return (audio, prompt.shape[2], codes.shape[2])
     }
 
@@ -361,68 +353,18 @@ final class Audio8MiniModel: Module, SpeechGenerationModel, @unchecked Sendable 
         return model
     }
 
+
     /// The first generation compiles the GPU kernels and takes several times longer than the rest.
     /// Audio8 has no built-in voice for the engine's own warm-up, so loading runs every path once
-    /// here: a reference long enough to take every chunk shape of the encoder, a short prompt with it,
-    /// then a decode long enough to take every chunk shape of the decoder (conv kernels differ with size).
+    /// here: a 5 s reference (enough for every encoder chunk shape, and a prompt past one SSM chunk),
+    /// a few frames with it, and a decode long enough for every decoder chunk shape.
     private func warmUp() {
-        let seconds = 3.5
-        let time = MLX.arange(Int(seconds * Double(sampleRate)), dtype: .float32) / Float(sampleRate)
+        let time = MLX.arange(5 * sampleRate, dtype: .float32) / Float(sampleRate)
         let tone = 0.3 * sin(2 * Float.pi * 220 * time) + 0.05 * MLXRandom.normal(time.shape, key: MLXRandom.key(0))
-        eval(tone)
-        print(String(format: "TRACE loaded, active %ld MB, peak %ld MB", Memory.activeMemory / 1_000_000, Memory.peakMemory / 1_000_000))
-        // TEMPORARY: chunked against whole-sequence encoding of the same signal.
-        let padded = MLX.padded(tone.asType(.float16).reshaped([1, tone.size, 1]),
-                                widths: [0, .init((0, (2048 - tone.size % 2048) % 2048)), 0])
-        let whole = codec.quantizer.encode(codec.encoder(padded)), pieces = codec.quantizer.encode(codec.encoder.chunked(padded))
-        let differ = sum((whole .!= pieces).asType(.int32)).item(Int32.self)
-        print("TRACE chunked encode: \(differ) of \(whole.size) codes differ")
         _ = try? run(text: "Hi.", reference: tone, transcript: "Hi.",
                      parameters: .init(maxTokens: 8, temperature: 0.7, topP: 0.9, topK: 50, seed: 0))
         eval(codec.decode(MLXArray.zeros([1, config.numCodebooks, 72], dtype: .int32)))
-        benchmarkSteps()
+        lastReference = nil
         Memory.clearCache()
-        print(String(format: "TRACE warmed up, active %ld MB, peak %ld MB (reset now)", Memory.activeMemory / 1_000_000, Memory.peakMemory / 1_000_000))
-        Memory.peakMemory = 0
-    }
-
-    /// TEMPORARY: what one slow step and one frame of fast codebooks cost, building versus running.
-    private func benchmarkSteps() {
-        let p = defaultGenerationParameters
-        let cache = model.slow.makeCache()
-        var (_, hidden) = model.slowStep(MLXArray.zeros([1, config.numCodebooks + 1, 16], dtype: .int32), cache: cache)
-        eval(hidden)
-        let column = MLXArray.zeros([1, config.numCodebooks + 1, 1], dtype: .int32)
-        var build = 0.0, total = 0.0
-        for _ in 0..<20 {
-            let start = Date()
-            let step = model.slowStep(column, cache: cache)
-            build += Date().timeIntervalSince(start)
-            eval(step.logits, step.hidden)
-            total += Date().timeIntervalSince(start)
-            hidden = step.hidden
-        }
-        print(String(format: "TRACE slow step: build %.1f ms, total %.1f ms", build * 50, total * 50))
-        build = 0; total = 0
-        let semantic = MLXArray([Int32(7)])
-        for i in 0..<20 {
-            let start = Date()
-            let frame = generateCodebooks(hidden: hidden, semantic: semantic, p: p, key: MLXRandom.key(UInt64(i)))
-            build += Date().timeIntervalSince(start)
-            eval(frame)
-            total += Date().timeIntervalSince(start)
-        }
-        print(String(format: "TRACE fast codebooks: build %.1f ms, total %.1f ms", build * 50, total * 50))
-        build = 0; total = 0
-        let logits = MLXRandom.normal([1, config.codebookSize + 1])
-        for i in 0..<20 {
-            let start = Date()
-            let scores = audio8MiniFilteredScores(logits, topK: p.topK, topP: p.topP, temperature: p.temperature)
-            let token = audio8MiniRaceSample(scores, key: MLXRandom.key(UInt64(i)))
-            build += Date().timeIntervalSince(start)
-            eval(token)
-            total += Date().timeIntervalSince(start)
-        }
-        print(String(format: "TRACE one sampling: build %.1f ms, total %.1f ms", build * 50, total * 50))
     }
 }

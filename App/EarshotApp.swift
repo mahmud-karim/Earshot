@@ -105,7 +105,7 @@ struct RootView: View {
                 startFresh()
                 conversation.attach(image, label: "Screenshot")
                 closeSheets()
-                conversation.startListening()
+                listenSoon()
             } else {
                 conversation.attach(image, label: "Screenshot")
             }
@@ -113,7 +113,16 @@ struct RootView: View {
         }
         guard settings.data.listenOnOpen, conversation.phase == .idle, !sheetIsOpen, !typing, away > 20 else { return }
         startFresh()
-        conversation.startListening()
+        listenSoon()
+    }
+
+    /// iOS hands silence to recording that starts the moment an app comes to the front; a short
+    /// wait avoids it.
+    private func listenSoon() {
+        Task {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if conversation.phase == .idle { conversation.startListening() }
+        }
     }
 
     /// A chat left a while ago is finished; a question now starts a new one.

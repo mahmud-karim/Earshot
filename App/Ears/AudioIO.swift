@@ -61,8 +61,16 @@ final class AudioIO {
 
     private func restartAfterChange() {
         guard isRunning else { return }
+        restart()
+    }
+
+    /// Stops and starts the engine again, keeping the session. For a microphone that delivers only
+    /// silence, which iOS does to recording that began before the app was fully in front.
+    func restart() {
+        guard isRunning else { return }
         isRunning = false
         engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
         try? start()
     }
 

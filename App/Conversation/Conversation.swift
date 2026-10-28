@@ -115,6 +115,9 @@ final class Conversation: ObservableObject {
     private var voicedSeconds = 0.0
     private var heard = false
     private var interruptSeconds = 0.0
+    /// How long the microphone has given pure digital silence while listening.
+    private var deadSeconds = 0.0
+    private var restartedThisListen = false
 
     /// Listens while a reply is spoken, to notice the user talking over it.
     private var interruptListener: Transcriber?
@@ -181,6 +184,8 @@ final class Conversation: ObservableObject {
         paused = false
         heard = false
         voicedSeconds = 0
+        deadSeconds = 0
+        restartedThisListen = false
         listenStart = Date()
         lastVoice = Date()
         phase = .listening
@@ -258,6 +263,17 @@ final class Conversation: ObservableObject {
         }
 
         let now = Date()
+        if phase == .listening && !paused {
+            // Real rooms are never exactly silent; zeros mean the input is not live.
+            deadSeconds = level <= -99.9 ? deadSeconds + seconds : 0
+            if deadSeconds > 1.0 && !restartedThisListen {
+                restartedThisListen = true
+                deadSeconds = 0
+                talkLog.notice("microphone gives only silence; restarting the audio engine")
+                AudioIO.shared.restart()
+                listenStart = now
+            }
+        }
         switch phase {
         case .listening where transcriberReady && !paused:
             if level > max(noiseFloor + 12, -52) {

@@ -1,5 +1,5 @@
 import Foundation
-import MLXAudioCore
+import MLXAudioTTS
 
 /// Audio8 TTS Preview 0.1B. Its slow stack is Falcon-H1 (Mamba-2, attention and an MLP in every
 /// layer), which the upstream Swift Audio8 port does not run.

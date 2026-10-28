@@ -10,11 +10,12 @@ import UIKit
 /// A preset's on-device voice, stored in VoiceChoice.voice as "model/voice", e.g. "pocket/alba".
 struct OnDeviceVoice: Equatable {
     var model: LocalVoiceModel
-    /// A built-in voice id, or one of the recordings: "ref:alba" ships with the app, "ref:mine" is the
-    /// user's own.
+    /// A built-in voice id, or one of the recordings: "ref:alba" and "ref:kyon" ship with the app,
+    /// "ref:mine" is the user's own.
     var voice: String
 
     static let builtInReference = "ref:alba"
+    static let kyonReference = "ref:kyon"
     static let myReference = "ref:mine"
 
     init(model: LocalVoiceModel, voice: String) {
@@ -38,6 +39,7 @@ struct OnDeviceVoice: Equatable {
     var voiceName: String {
         switch voice {
         case OnDeviceVoice.builtInReference: return "Alba recording"
+        case OnDeviceVoice.kyonReference: return "Kyon"
         case OnDeviceVoice.myReference: return "My voice"
         default: return model.info.voices.first(where: { $0.id == voice })?.name ?? voice
         }
@@ -49,6 +51,7 @@ struct OnDeviceVoice: Equatable {
     var reference: VoiceReference? {
         switch voice {
         case OnDeviceVoice.builtInReference: return VoiceSamples.builtIn
+        case OnDeviceVoice.kyonReference: return VoiceSamples.kyon
         case OnDeviceVoice.myReference: return VoiceSamples.mine
         default: return nil
         }
@@ -61,9 +64,14 @@ enum VoiceSamples {
     static let readAloud = "Hi, I'm recording a sample of my voice so Earshot can speak like me. I'm reading this at my normal pace, clearly and calmly."
 
     /// A clip Pocket TTS made in its Alba voice, shipped with the app.
-    static var builtIn: VoiceReference? {
-        guard let audio = Bundle.main.url(forResource: "alba", withExtension: "wav"),
-              let textURL = Bundle.main.url(forResource: "alba", withExtension: "txt"),
+    static var builtIn: VoiceReference? { bundled("alba") }
+
+    /// A clean clip in Kyon's voice, made with Breeze TTS 2, shipped with the app.
+    static var kyon: VoiceReference? { bundled("kyon") }
+
+    private static func bundled(_ name: String) -> VoiceReference? {
+        guard let audio = Bundle.main.url(forResource: name, withExtension: "wav"),
+              let textURL = Bundle.main.url(forResource: name, withExtension: "txt"),
               let text = try? String(contentsOf: textURL, encoding: .utf8) else { return nil }
         return VoiceReference(audio: audio, transcript: text.trimmingCharacters(in: .whitespacesAndNewlines))
     }
@@ -149,6 +157,11 @@ final class LocalVoiceDownloads: ObservableObject {
 
     func cancel(_ model: LocalVoiceModel) {
         tasks[model]?.cancel()
+    }
+
+    /// The "My voice" recording was saved or deleted; the voice lists read it from disk.
+    func recordingChanged() {
+        version += 1
     }
 
     func delete(_ model: LocalVoiceModel) {

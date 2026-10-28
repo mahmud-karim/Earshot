@@ -641,6 +641,34 @@ final class Conversation: ObservableObject {
         if save { _ = try await recorder.finish() }
     }
 
+    /// Plays the saved "My voice" recording as it is, so the user can hear whether it came out clear.
+    /// `done` runs when it ends or is stopped.
+    func playMyRecording(done: @escaping () -> Void) {
+        guard phase == .idle else { return done() }
+        previewQueue?.stop()
+        do {
+            let file = try AVAudioFile(forReading: VoiceSamples.myFile)
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)) else {
+                return done()
+            }
+            try file.read(into: buffer)
+            try AudioIO.shared.start()
+            AudioIO.shared.play(buffer) {
+                Task { @MainActor [weak self] in
+                    self?.stopAudioIfIdle()
+                    done()
+                }
+            }
+        } catch {
+            self.error = error.localizedDescription
+            done()
+        }
+    }
+
+    func stopMyRecording() {
+        AudioIO.shared.stopPlayback()
+    }
+
     /// Loads an on-device voice while the user is still talking, so the reply does not wait for it.
     private func warmUpVoice() {
         guard settings.preset.voice.kind == .onDevice, let voice = OnDeviceVoice(settings.preset.voice.voice),

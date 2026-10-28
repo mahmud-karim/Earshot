@@ -59,10 +59,13 @@ struct OnDeviceVoicesPage: View {
                         Hairline()
                         voiceRow(voice)
                     }
-                    if info.clonesVoices && VoiceSamples.mine == nil {
+                    if info.clonesVoices {
+                        let recorded = VoiceSamples.mine != nil
                         Hairline()
                         NavigationLink(value: ModelsRoute.myVoice) {
-                            RowLabel(title: "Record my voice", subtitle: "Read one sentence; this model copies how you sound", titleColor: Theme.clay) {
+                            RowLabel(title: recorded ? "Change my recording" : "Record my voice",
+                                     subtitle: recorded ? "Listen to it, record it again, or delete it" : "Read one sentence; this model copies how you sound",
+                                     titleColor: Theme.clay) {
                                 Chevron()
                             }
                         }
@@ -77,6 +80,9 @@ struct OnDeviceVoicesPage: View {
         var list = model.info.voices.map { OnDeviceVoice(model: model, voice: $0.id) }
         if model.info.needsReference {
             list.append(OnDeviceVoice(model: model, voice: OnDeviceVoice.builtInReference))
+        }
+        if model.info.clonesVoices && VoiceSamples.kyon != nil {
+            list.append(OnDeviceVoice(model: model, voice: OnDeviceVoice.kyonReference))
         }
         if model.info.clonesVoices && VoiceSamples.mine != nil {
             list.append(OnDeviceVoice(model: model, voice: OnDeviceVoice.myReference))
@@ -146,6 +152,7 @@ struct MyVoicePage: View {
     @State private var seconds = 0.0
     @State private var message: String?
     @State private var saved = VoiceSamples.mine != nil
+    @State private var playing = false
     private let timer = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -157,6 +164,9 @@ struct MyVoicePage: View {
                 .font(Theme.serif(21)).foregroundStyle(Theme.text)
                 .padding(16).frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 16).fill(Theme.surface))
+            if saved && recorder == nil {
+                listenButton
+            }
             if recorder != nil {
                 PrimaryPill(title: String(format: "Stop · %.0f s", seconds), systemImage: "stop.fill") { stop(save: true) }
             } else {
@@ -167,7 +177,9 @@ struct MyVoicePage: View {
             }
             if saved && recorder == nil {
                 Button("Delete my recording", role: .destructive) {
+                    stopListening()
                     try? FileManager.default.removeItem(at: VoiceSamples.myFile)
+                    LocalVoiceDownloads.shared.recordingChanged()
                     saved = false
                     message = nil
                 }
@@ -181,10 +193,48 @@ struct MyVoicePage: View {
         .onReceive(timer) { _ in
             seconds = recorder?.seconds ?? 0
         }
-        .onDisappear { stop(save: false) }
+        .onDisappear {
+            stopListening()
+            stop(save: false)
+        }
+    }
+
+    /// Plays the recording back as it was saved: the models copy whatever it holds, noise included.
+    private var listenButton: some View {
+        Button {
+            if playing {
+                stopListening()
+            } else {
+                playing = true
+                conversation.playMyRecording { playing = false }
+            }
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: playing ? "stop.fill" : "play.fill").font(.system(size: 14))
+                    .foregroundStyle(Theme.onClay)
+                    .frame(width: 40, height: 40).background(Circle().fill(Theme.clay))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(playing ? "Playing your recording" : "Listen to your recording")
+                        .font(.system(size: 16, weight: .medium)).foregroundStyle(Theme.text)
+                    Text("Check it's clear, with no background noise or echo")
+                        .font(.system(size: 13)).foregroundStyle(Theme.muted)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 16).fill(Theme.surface))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func stopListening() {
+        guard playing else { return }
+        conversation.stopMyRecording()
+        playing = false
     }
 
     private func start() {
+        stopListening()
         message = nil
         Task {
             if let made = await conversation.startSampleRecording() {
@@ -202,8 +252,9 @@ struct MyVoicePage: View {
             do {
                 try await conversation.stopSampleRecording(recorder, save: save)
                 if save {
+                    LocalVoiceDownloads.shared.recordingChanged()
                     saved = true
-                    message = "Saved. Pick “My voice” under any model that copies voices."
+                    message = "Saved. Listen to check it, then pick “My voice” under any model that copies voices."
                 }
             } catch {
                 message = error.localizedDescription

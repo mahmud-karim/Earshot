@@ -1,4 +1,5 @@
 import Foundation
+import LocalVoices
 import Security
 import SwiftUI
 
@@ -24,12 +25,17 @@ struct SettingsData: Codable, Equatable {
     var elevenLabsVoiceID = ""
     var pcVoice = "af_heart"
     var onDeviceVoice = "pocket/alba"
+    /// How fast Ming speaks a copied voice (Kyon, My voice).
+    var mingPace: LocalVoicePace = .natural
     /// Host name or address of the PC, e.g. my-pc.tail1234.ts.net. Empty when there is none.
     var pcAddress = ""
     /// OpenAI-compatible chat server on the PC: Ollama is 11434, LM Studio 1234.
     var pcChatPort = 11434
     /// OpenAI-compatible speech server on the PC (speaches: Whisper and Kokoro).
     var pcSpeechPort = 8000
+
+    /// Claude may search the web and read pages to answer.
+    var webSearch = true
 
     var handsFree = false
     var interruptByTalking = true

@@ -91,6 +91,7 @@ enum VoiceSamples {
 struct OnDeviceSynthesizer: Synthesizer {
     let choice: OnDeviceVoice
     let fallback: AppleSynthesizer
+    var pace: LocalVoicePace = .natural
 
     func audio(for text: String) async throws -> [AVAudioPCMBuffer] {
         let active = await MainActor.run { UIApplication.shared.applicationState == .active }
@@ -100,7 +101,7 @@ struct OnDeviceSynthesizer: Synthesizer {
             reference = VoiceSamples.builtIn
         }
         let (samples, rate) = try await LocalVoiceEngine.shared.speak(
-            text, model: choice.model, voice: reference == nil ? choice.voice : nil, reference: reference)
+            text, model: choice.model, voice: reference == nil ? choice.voice : nil, reference: reference, pace: pace)
         guard !samples.isEmpty,
               let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(rate), channels: 1, interleaved: false),
               let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)),

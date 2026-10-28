@@ -97,6 +97,10 @@ final class Conversation: ObservableObject {
     @Published private(set) var replyModel = ""
     /// The earlier answer being read out again, if any.
     @Published private(set) var replaying: UUID?
+    /// The reply is waiting on a web search or a page.
+    @Published private(set) var searching = false
+    /// Pages the reply in progress draws on.
+    @Published private(set) var replySources: [Source] = []
     @Published var error: String?
     @Published private(set) var status: String?
     @Published private(set) var paused = false
@@ -372,13 +376,16 @@ final class Conversation: ObservableObject {
         queue.onError = { [weak self] message in self?.error = message }
         speech = queue
 
-        let request = BrainRequest(model: preset.brain.model, system: Conversation.systemPrompt(),
-                                   messages: history(current), effort: preset.effort)
+        let webAccess = preset.brain.kind == .anthropic && settings.data.webSearch
+        let request = BrainRequest(model: preset.brain.model, system: Conversation.systemPrompt(webAccess: webAccess),
+                                   messages: history(current), effort: preset.effort, webAccess: webAccess)
         let label = preset.brain.label
         let model = preset.brain.model
         let chatID = current.id
         reply = ""
         spokenText = ""
+        replySources = []
+        searching = false
         replyModel = label
         deadSeconds = 0
         restartsThisTurn = 0
@@ -390,26 +397,43 @@ final class Conversation: ObservableObject {
             var input = 0
             var output = 0
             var splitter = SentenceSplitter()
+            var searches = 0
             do {
                 for try await event in brain.stream(request) {
                     guard let self else { return }
                     switch event {
                     case .text(let text):
                         if firstWord == nil { firstWord = Date().timeIntervalSince(started) }
+                        self.searching = false
                         self.reply += text
                         self.spokenText += text
                         for sentence in splitter.push(text) { self.speech?.enqueue(sentence) }
                     case .usage(let i, let o):
                         input = i
                         output = o
+                    case .searching(let webSearch):
+                        if webSearch { searches += 1 }
+                        // Searching takes a few seconds. Say so, unless the answer already has.
+                        if !self.searching && self.spokenText.isEmpty {
+                            let cue = "Let me look that up."
+                            self.spokenText += cue + " "
+                            self.speech?.enqueue(cue)
+                        }
+                        self.searching = true
+                    case .source(let title, let url):
+                        self.replySources.append(Source(title: title, url: url))
                     }
                 }
                 guard let self else { return }
+                self.searching = false
                 for sentence in splitter.flush() { self.speech?.enqueue(sentence) }
-                let cost = Catalog.cost(model: model, input: input, output: output)
+                // Web searches are billed per search on top of tokens.
+                let cost = Catalog.cost(model: model, input: input, output: output).map { $0 + Double(searches) * Catalog.searchPrice }
                 if let cost { self.spend.add(cost) }
-                self.appendReply(Turn(isUser: false, text: self.reply, modelLabel: label, cost: cost, firstWordSeconds: firstWord), to: chatID)
+                self.appendReply(Turn(isUser: false, text: self.reply, modelLabel: label, cost: cost, firstWordSeconds: firstWord,
+                                      sources: self.replySources.isEmpty ? nil : self.replySources), to: chatID)
                 self.reply = ""
+                self.replySources = []
                 if let speech = self.speech {
                     speech.finishInput()
                 } else if self.phase == .thinking || self.phase == .speaking {
@@ -420,6 +444,8 @@ final class Conversation: ObservableObject {
                 guard let self else { return }
                 let partial = self.reply
                 self.reply = ""
+                self.searching = false
+                self.replySources = []
                 if Task.isCancelled {
                     if !partial.isEmpty {
                         self.appendReply(Turn(isUser: false, text: partial, modelLabel: label, firstWordSeconds: firstWord), to: chatID)
@@ -451,6 +477,7 @@ final class Conversation: ObservableObject {
         speech?.stop()
         speech = nil
         replaying = nil
+        searching = false
         replyTask?.cancel()
         replyTask = nil
         phase = .idle
@@ -800,7 +827,8 @@ final class Conversation: ObservableObject {
                     error = "\(voice.model.info.name) isn't downloaded yet, so Apple's voice is speaking instead."
                     return AppleSynthesizer(identifier: settings.data.appleVoice)
                 }
-                return OnDeviceSynthesizer(choice: voice, fallback: AppleSynthesizer(identifier: settings.data.appleVoice))
+                return OnDeviceSynthesizer(choice: voice, fallback: AppleSynthesizer(identifier: settings.data.appleVoice),
+                                           pace: settings.data.mingPace)
             }
         }
         error = "That voice isn't set up yet, so Apple's voice is speaking instead."
@@ -812,15 +840,16 @@ final class Conversation: ObservableObject {
         return clean.count > 48 ? String(clean.prefix(47)) + "…" : clean
     }
 
-    static func systemPrompt() -> String {
+    static func systemPrompt(webAccess: Bool = false) -> String {
         let date = Date().formatted(date: .complete, time: .shortened)
+        let web = webAccess ? "\n- You can search the web and open pages. Do it when the answer depends on recent or specific facts you can't be sure of, not for things you already know. Never read web addresses aloud; the app lists your sources on screen." : ""
         return """
         You are Earshot, a voice assistant on the user's iPhone. Your replies are read aloud, so:
         - Talk the way a person would. Lead with the answer and keep it short: one to three sentences for a simple question, more only when the user asks for detail or the task needs it.
         - Write plain sentences. No headings, tables, bullet lists or bold text.
         - When the user asks you to draft something they will copy or send (a message, an email, a note, code), put only the draft inside a fenced block (```), and say one short sentence before it. The fenced block is shown on screen and is not read aloud.
         - An attached image is usually a screenshot of what was on the user's screen when they asked. Talk about what is in it directly.
-        - Speech recognition sometimes mishears words. If a question looks garbled, answer your best guess and say briefly what you assumed.
+        - Speech recognition sometimes mishears words. If a question looks garbled, answer your best guess and say briefly what you assumed.\(web)
         It is \(date). The user's locale is \(Locale.current.identifier).
         """
     }

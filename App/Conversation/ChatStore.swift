@@ -18,6 +18,13 @@ struct Turn: Codable, Identifiable, Equatable {
     var cost: Double?
     var firstWordSeconds: Double?
     var failed = false
+    /// Web pages the answer drew on, when it searched.
+    var sources: [Source]?
+}
+
+struct Source: Codable, Equatable, Hashable {
+    var title: String
+    var url: String
 }
 
 struct Chat: Codable, Identifiable, Equatable {

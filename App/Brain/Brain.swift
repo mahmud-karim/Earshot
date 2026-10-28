@@ -16,11 +16,17 @@ struct BrainRequest {
     var system: String
     var messages: [BrainMessage]
     var effort: Effort
+    /// Lets the model search the web and read pages. Claude only; other brains ignore it.
+    var webAccess = false
 }
 
 enum BrainEvent {
     case text(String)
     case usage(input: Int, output: Int)
+    /// The model started a web search, or opened a page when `webSearch` is false.
+    case searching(webSearch: Bool)
+    /// A page the answer is drawn from.
+    case source(title: String, url: String)
 }
 
 protocol Brain {
@@ -74,7 +80,7 @@ struct AnthropicBrain: Brain {
             urlRequest.setValue("server-side-fallback-2026-07-01", forHTTPHeaderField: "anthropic-beta")
         }
 
-        let messages: [[String: Any]] = request.messages.map { message in
+        var messages: [[String: Any]] = request.messages.map { message in
             var content: [[String: Any]] = []
             if let image = message.image {
                 content.append([
@@ -90,56 +96,143 @@ struct AnthropicBrain: Brain {
             "max_tokens": 32000,
             "stream": true,
             "system": request.system,
-            "messages": messages,
             "output_config": ["effort": request.effort.rawValue]
         ]
+        if request.webAccess {
+            // The basic versions: the newer ones filter results by running code first, which is
+            // slower to the first spoken word.
+            body["tools"] = [
+                ["type": "web_search_20250305", "name": "web_search", "max_uses": 5],
+                ["type": "web_fetch_20250910", "name": "web_fetch", "max_uses": 3, "max_content_tokens": 20000]
+            ]
+        }
         if useFallback {
             body["fallbacks"] = "default"
-        }
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (bytes, response) = try await URLSession.shared.bytes(for: urlRequest)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        if status != 200 {
-            let text = try await SSE.collect(bytes)
-            if status == 400 && useFallback && text.contains("fallback") {
-                throw FallbackRejected()
-            }
-            throw BrainError(message: SSE.readableError(status: status, body: text))
         }
 
         var input = 0
         var output = 0
-        for try await line in bytes.lines {
-            guard let event = SSE.json(line) else { continue }
-            switch event["type"] as? String {
-            case "message_start":
-                if let usage = (event["message"] as? [String: Any])?["usage"] as? [String: Any] {
-                    input = (usage["input_tokens"] as? Int ?? 0)
-                        + (usage["cache_read_input_tokens"] as? Int ?? 0)
-                        + (usage["cache_creation_input_tokens"] as? Int ?? 0)
+        var sources = Set<String>()
+        // A turn with many searches can pause; sending the paused answer back resumes it.
+        for _ in 0..<4 {
+            body["messages"] = messages
+            urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (bytes, response) = try await URLSession.shared.bytes(for: urlRequest)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if status != 200 {
+                let text = try await SSE.collect(bytes)
+                if status == 400 && useFallback && text.contains("fallback") {
+                    throw FallbackRejected()
                 }
-            case "content_block_delta":
-                if let delta = event["delta"] as? [String: Any],
-                   delta["type"] as? String == "text_delta",
-                   let text = delta["text"] as? String {
-                    continuation.yield(.text(text))
+                throw BrainError(message: SSE.readableError(status: status, body: text))
+            }
+
+            var blocks = ContentBlocks()
+            var stopReason: String?
+            for try await line in bytes.lines {
+                guard let event = SSE.json(line) else { continue }
+                blocks.apply(event)
+                switch event["type"] as? String {
+                case "message_start":
+                    if let usage = (event["message"] as? [String: Any])?["usage"] as? [String: Any] {
+                        input += (usage["input_tokens"] as? Int ?? 0)
+                            + (usage["cache_read_input_tokens"] as? Int ?? 0)
+                            + (usage["cache_creation_input_tokens"] as? Int ?? 0)
+                    }
+                case "content_block_start":
+                    guard let block = event["content_block"] as? [String: Any] else { break }
+                    switch block["type"] as? String {
+                    case "server_tool_use":
+                        continuation.yield(.searching(webSearch: block["name"] as? String == "web_search"))
+                    case "web_fetch_tool_result":
+                        // A page it opened. Search results only count once the answer cites them.
+                        if let result = block["content"] as? [String: Any], let url = result["url"] as? String,
+                           sources.insert(url).inserted {
+                            let title = ((result["content"] as? [String: Any])?["title"] as? String) ?? ""
+                            continuation.yield(.source(title: title, url: url))
+                        }
+                    default:
+                        break
+                    }
+                case "content_block_delta":
+                    guard let delta = event["delta"] as? [String: Any] else { break }
+                    switch delta["type"] as? String {
+                    case "text_delta":
+                        if let text = delta["text"] as? String { continuation.yield(.text(text)) }
+                    case "citations_delta":
+                        if let citation = delta["citation"] as? [String: Any], let url = citation["url"] as? String,
+                           sources.insert(url).inserted {
+                            continuation.yield(.source(title: citation["title"] as? String ?? "", url: url))
+                        }
+                    default:
+                        break
+                    }
+                case "message_delta":
+                    if let usage = event["usage"] as? [String: Any], let tokens = usage["output_tokens"] as? Int {
+                        output += tokens
+                    }
+                    if let delta = event["delta"] as? [String: Any], let reason = delta["stop_reason"] as? String {
+                        stopReason = reason
+                        if reason == "refusal" {
+                            continuation.yield(.text("\n\nThe model declined to answer this one."))
+                        }
+                    }
+                case "error":
+                    let message = ((event["error"] as? [String: Any])?["message"] as? String) ?? "The stream failed."
+                    throw BrainError(message: message)
+                default:
+                    break
                 }
-            case "message_delta":
-                if let usage = event["usage"] as? [String: Any], let tokens = usage["output_tokens"] as? Int {
-                    output = tokens
+            }
+            guard stopReason == "pause_turn" else { break }
+            messages.append(["role": "assistant", "content": blocks.content])
+        }
+        continuation.yield(.usage(input: input, output: output))
+    }
+}
+
+/// Rebuilds the answer's content blocks from the stream, so a paused turn can be sent back as it was.
+private struct ContentBlocks {
+    private var blocks: [Int: [String: Any]] = [:]
+    private var partialJSON: [Int: String] = [:]
+
+    var content: [[String: Any]] {
+        blocks.keys.sorted().compactMap { blocks[$0] }.filter { $0["type"] as? String != "fallback" }
+    }
+
+    mutating func apply(_ event: [String: Any]) {
+        guard let index = event["index"] as? Int else { return }
+        switch event["type"] as? String {
+        case "content_block_start":
+            blocks[index] = event["content_block"] as? [String: Any]
+        case "content_block_delta":
+            guard var block = blocks[index], let delta = event["delta"] as? [String: Any] else { return }
+            switch delta["type"] as? String {
+            case "text_delta":
+                block["text"] = (block["text"] as? String ?? "") + (delta["text"] as? String ?? "")
+            case "thinking_delta":
+                block["thinking"] = (block["thinking"] as? String ?? "") + (delta["thinking"] as? String ?? "")
+            case "signature_delta":
+                block["signature"] = delta["signature"]
+            case "citations_delta":
+                if let citation = delta["citation"] {
+                    block["citations"] = (block["citations"] as? [Any] ?? []) + [citation]
                 }
-                if let delta = event["delta"] as? [String: Any], delta["stop_reason"] as? String == "refusal" {
-                    continuation.yield(.text("\n\nThe model declined to answer this one."))
-                }
-            case "error":
-                let message = ((event["error"] as? [String: Any])?["message"] as? String) ?? "The stream failed."
-                throw BrainError(message: message)
+            case "input_json_delta":
+                partialJSON[index, default: ""] += delta["partial_json"] as? String ?? ""
             default:
                 break
             }
+            blocks[index] = block
+        case "content_block_stop":
+            if let json = partialJSON.removeValue(forKey: index), var block = blocks[index] {
+                let data = json.data(using: .utf8) ?? Data()
+                block["input"] = (try? JSONSerialization.jsonObject(with: data)) ?? [String: Any]()
+                blocks[index] = block
+            }
+        default:
+            break
         }
-        continuation.yield(.usage(input: input, output: output))
     }
 }
 

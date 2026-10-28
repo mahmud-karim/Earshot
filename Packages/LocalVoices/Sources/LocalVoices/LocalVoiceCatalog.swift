@@ -1,5 +1,20 @@
 import Foundation
 
+/// How fast Ming speaks a copied voice. `natural` keeps the recording's own pace.
+public enum LocalVoicePace: String, CaseIterable, Codable, Sendable {
+    case natural, slow, medium, fast
+
+    /// The publisher's speed values for Ming-3.0's basic controls.
+    var mingSpeed: String? {
+        switch self {
+        case .natural: return nil
+        case .slow: return "慢速"
+        case .medium: return "中速"
+        case .fast: return "快速"
+        }
+    }
+}
+
 /// A speech model that runs on the phone. Each is downloaded once from Hugging Face and kept in the
 /// app's own storage.
 public enum LocalVoiceModel: String, CaseIterable, Codable, Sendable {

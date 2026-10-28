@@ -85,6 +85,17 @@ struct ModelsSheet: View {
                       height: 36)
             Text(effortNote).font(.system(size: 13)).foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Search the web").font(.system(size: 15)).foregroundStyle(Theme.text)
+                    Text("Looks things up and reads pages when it needs to · 1¢ a search")
+                        .font(.system(size: 13)).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                ClayToggle(isOn: $settings.data.webSearch)
+            }
+            .padding(.top, 6)
         }
         .padding(.horizontal, 16).padding(.bottom, 14)
     }

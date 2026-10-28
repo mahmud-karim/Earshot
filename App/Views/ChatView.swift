@@ -21,11 +21,12 @@ struct ChatView: View {
                             } else {
                                 ReplyBlock(text: turn.text, model: turn.modelLabel ?? "", failed: turn.failed,
                                            meta: meta(turn), retry: retryAction(turn),
-                                           replay: replayControl(turn))
+                                           replay: replayControl(turn), sources: turn.sources ?? [])
                             }
                         }
                         if conversation.phase == .thinking || !conversation.reply.isEmpty {
-                            ReplyBlock(text: conversation.reply, model: conversation.replyModel, failed: false, meta: nil, retry: nil, replay: nil)
+                            ReplyBlock(text: conversation.reply, model: conversation.replyModel, failed: false, meta: nil, retry: nil, replay: nil,
+                                       sources: conversation.replySources)
                         }
                         Color.clear.frame(height: 1).id("end")
                     }
@@ -156,6 +157,7 @@ struct ReplyBlock: View {
     let meta: String?
     let retry: (() -> Void)?
     let replay: ReplayControl?
+    var sources: [Source] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -178,6 +180,9 @@ struct ReplyBlock: View {
                 case .draft(let draft):
                     DraftCard(text: draft)
                 }
+            }
+            if !sources.isEmpty {
+                SourceList(sources: sources)
             }
             if failed, let retry {
                 Button("Try again", action: retry)
@@ -236,6 +241,34 @@ struct ReplyBlock: View {
     static func markdown(_ text: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+    }
+}
+
+/// The web pages an answer drew on, as links.
+struct SourceList: View {
+    let sources: [Source]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Sources").font(.system(size: 13)).foregroundStyle(Theme.muted)
+            ForEach(sources, id: \.url) { source in
+                if let url = URL(string: source.url) {
+                    Link(destination: url) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "globe").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                            Text(source.title.isEmpty ? (url.host() ?? source.url) : source.title)
+                                .font(.system(size: 14)).foregroundStyle(Theme.textBody).lineLimit(1)
+                            Spacer(minLength: 4)
+                            Text(url.host()?.replacingOccurrences(of: "www.", with: "") ?? "")
+                                .font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(1)
+                        }
+                        .padding(.horizontal, 12).frame(height: 36)
+                        .background(RoundedRectangle(cornerRadius: 10).fill(Theme.surface))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
     }
 }
 
@@ -311,7 +344,7 @@ struct StatusBar: View {
             if conversation.phase == .speaking {
                 LevelBars(levels: pulse, barWidth: 3, maxHeight: 24, spacing: 3)
             }
-            Text(conversation.phase == .speaking ? "Speaking · tap to interrupt" : "Thinking…")
+            Text(conversation.searching ? "Searching the web…" : conversation.phase == .speaking ? "Speaking · tap to interrupt" : "Thinking…")
                 .font(.system(size: 14)).foregroundStyle(Theme.secondary).lineLimit(1)
             Spacer(minLength: 0)
             Button(action: conversation.stopSpeaking) {

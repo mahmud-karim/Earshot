@@ -130,6 +130,9 @@ enum Catalog {
         model.split(separator: "/").last.map(String.init) ?? model
     }
 
+    /// Dollars per web search, on top of tokens ($10 per 1,000).
+    static let searchPrice = 0.01
+
     /// Dollars for one reply, when the price is known.
     static func cost(model: String, input: Int, output: Int) -> Double? {
         guard let known = anthropicModels.first(where: { $0.id == model }) else { return nil }

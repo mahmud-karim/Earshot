@@ -54,8 +54,9 @@ public final class LocalVoiceEngine: @unchecked Sendable {
     }
 
     /// One sentence of speech: mono samples at `sampleRate`.
+    /// `pace` applies to Ming with a reference only; other voices keep their own pace.
     public func speak(_ text: String, model: LocalVoiceModel, voice: String?, reference: VoiceReference?,
-                      language: String? = nil) async throws -> (samples: [Float], sampleRate: Int) {
+                      language: String? = nil, pace: LocalVoicePace = .natural) async throws -> (samples: [Float], sampleRate: Int) {
         try await serial {
             let speech = try await self.speechModel(model)
             try Task.checkCancellation()
@@ -63,11 +64,21 @@ public final class LocalVoiceEngine: @unchecked Sendable {
             if let reference {
                 refAudio = try loadAudioArray(from: reference.audio, sampleRate: speech.sampleRate).1
             }
+            var refText = reference?.transcript
+            if let ming = speech as? MingDenseModel {
+                ming.options.instruction = nil
+                if reference != nil, let speed = pace.mingSpeed {
+                    // Ming takes a pace only when it copies the voice from the sound alone: the
+                    // recording's words would carry its own pace with them.
+                    ming.options.instruction = MingText.instruction(speed: speed, pitch: "中", volume: "中")
+                    refText = nil
+                }
+            }
             let audio = try await speech.generate(
                 text: text,
                 voice: reference == nil ? voice : nil,
                 refAudio: refAudio,
-                refText: reference?.transcript,
+                refText: refText,
                 language: language ?? Self.language(model),
                 generationParameters: speech.defaultGenerationParameters
             )

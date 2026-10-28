@@ -59,6 +59,10 @@ struct OnDeviceVoicesPage: View {
                         Hairline()
                         voiceRow(voice)
                     }
+                    if model == .ming {
+                        Hairline()
+                        mingPace
+                    }
                     if info.clonesVoices {
                         let recorded = VoiceSamples.mine != nil
                         Hairline()
@@ -74,6 +78,19 @@ struct OnDeviceVoicesPage: View {
                 }
             }
         }
+    }
+
+    /// Ming can be asked for a pace, but only when it copies a recording.
+    private var mingPace: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Pace").font(.system(size: 15)).foregroundStyle(Theme.text)
+            Segmented(options: [(LocalVoicePace.natural, "Natural"), (.slow, "Slow"), (.medium, "Medium"), (.fast, "Fast")],
+                      selection: $settings.data.mingPace, height: 36)
+            Text("For Kyon and My voice. Natural copies the recording's own pace; the others sound a little less like the recording. Ming's built-in voices keep their own pace.")
+                .font(.system(size: 13)).foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
     }
 
     private func voices(_ model: LocalVoiceModel) -> [OnDeviceVoice] {

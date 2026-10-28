@@ -1,5 +1,5 @@
 import Foundation
-import MLXAudioCore
+import MLXAudioTTS
 
 /// Raon-OpenTTS 1B: an F5-TTS style flow-matching DiT with a 16 kHz HiFi-GAN vocoder.
 enum RaonLoader {

@@ -193,10 +193,12 @@ struct SentenceSplitter {
 // MARK: - Apple voices
 
 enum AppleVoices {
-    /// English voices, best quality first.
+    /// English voices, best quality first. The novelty voices (Bells, Zarvox, …) and the Eloquence
+    /// ones (Grandma, Rocko, …) are left out: nobody wants an assistant that sounds like them.
     static func english() -> [AVSpeechSynthesisVoice] {
         AVSpeechSynthesisVoice.speechVoices()
             .filter { $0.language.hasPrefix("en") }
+            .filter { !$0.identifier.contains("speech.synthesis.voice") && !$0.identifier.contains("eloquence") }
             .sorted { lhs, rhs in
                 if lhs.quality.rawValue != rhs.quality.rawValue { return lhs.quality.rawValue > rhs.quality.rawValue }
                 return lhs.name < rhs.name

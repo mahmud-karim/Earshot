@@ -50,12 +50,13 @@ enum VoiceKind: String, Codable, CaseIterable {
     case openAI
     case elevenLabs
     case pc
+    case onDevice
 }
 
 struct VoiceChoice: Codable, Equatable, Hashable {
     var kind: VoiceKind
     /// Apple: voice identifier (empty picks the best English voice). OpenAI and PC: voice name.
-    /// ElevenLabs: voice id.
+    /// ElevenLabs: voice id. On device: "model/voice", see OnDeviceVoice.
     var voice: String
 
     var label: String {
@@ -64,6 +65,7 @@ struct VoiceChoice: Codable, Equatable, Hashable {
         case .openAI: return "OpenAI · " + voice.capitalized
         case .elevenLabs: return "ElevenLabs"
         case .pc: return "Kokoro · " + voice
+        case .onDevice: return OnDeviceVoice(voice)?.label ?? "On this iPhone"
         }
     }
 }

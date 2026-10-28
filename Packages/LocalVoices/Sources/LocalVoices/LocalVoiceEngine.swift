@@ -25,16 +25,15 @@ public final class LocalVoiceEngine: @unchecked Sendable {
 
     /// Runs `work` after every earlier request has finished.
     private func serial<T: Sendable>(_ work: @escaping @Sendable () async throws -> T) async throws -> T {
-        let previous: Task<Void, Never>?
-        let current: Task<T, Error>
-        lock.lock()
-        previous = tail
-        current = Task {
-            await previous?.value
-            return try await work()
+        let current: Task<T, Error> = lock.withLock {
+            let previous = tail
+            let current = Task {
+                await previous?.value
+                return try await work()
+            }
+            tail = Task { _ = try? await current.value }
+            return current
         }
-        tail = Task { _ = try? await current.value }
-        lock.unlock()
         return try await withTaskCancellationHandler {
             try await current.value
         } onCancel: {

@@ -34,6 +34,10 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
+      - name: Install the Metal toolchain
+        # MLX, which runs the on-device voices, compiles Metal shaders.
+        run: xcodebuild -downloadComponent MetalToolchain
+
       - name: Generate the Xcode project
         run: |
           command -v xcodegen >/dev/null || HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen

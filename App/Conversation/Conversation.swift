@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import LocalVoices
 import os
 import SwiftUI
 import UIKit
@@ -171,6 +172,7 @@ final class Conversation: ObservableObject {
             return
         }
         transcriber = made
+        warmUpVoice()
         transcriberReady = false
         transcriberGivesLiveText = made.givesLiveText
         made.onText = { [weak self] text in
@@ -613,6 +615,41 @@ final class Conversation: ObservableObject {
         }
     }
 
+    // MARK: - Recording a voice to copy
+
+    /// Starts collecting the microphone for "My voice". Nil when the microphone is not available.
+    func startSampleRecording() async -> SampleRecorder? {
+        guard phase == .idle else { return nil }
+        guard await AVAudioApplication.requestRecordPermission() else {
+            error = "Earshot needs the microphone. Allow it for LiveContainer in Settings › Privacy › Microphone."
+            return nil
+        }
+        do {
+            try AudioIO.shared.start()
+        } catch {
+            self.error = "The microphone could not start: \(error.localizedDescription)"
+            return nil
+        }
+        let recorder = SampleRecorder()
+        router.attach(recorder, withPreroll: false)
+        return recorder
+    }
+
+    func stopSampleRecording(_ recorder: SampleRecorder, save: Bool) async throws {
+        router.detach()
+        stopAudioIfIdle()
+        if save { _ = try await recorder.finish() }
+    }
+
+    /// Loads an on-device voice while the user is still talking, so the reply does not wait for it.
+    private func warmUpVoice() {
+        guard settings.preset.voice.kind == .onDevice, let voice = OnDeviceVoice(settings.preset.voice.voice),
+              LocalModelStore.shared.isDownloaded(voice.model) else { return }
+        Task.detached(priority: .userInitiated) {
+            try? await LocalVoiceEngine.shared.prepare(voice.model)
+        }
+    }
+
     private func stopAudioIfIdle() {
         if phase == .idle {
             AudioIO.shared.stop()
@@ -695,6 +732,14 @@ final class Conversation: ObservableObject {
             if let url = settings.pcURL(port: settings.data.pcSpeechPort) {
                 return OpenAISpeechSynthesizer(baseURL: url, apiKey: nil, model: settings.data.pcVoiceModel,
                                                voice: choice.voice.isEmpty ? "af_heart" : choice.voice)
+            }
+        case .onDevice:
+            if let voice = OnDeviceVoice(choice.voice) {
+                guard LocalModelStore.shared.isDownloaded(voice.model) else {
+                    error = "\(voice.model.info.name) isn't downloaded yet, so Apple's voice is speaking instead."
+                    return AppleSynthesizer(identifier: settings.data.appleVoice)
+                }
+                return OnDeviceSynthesizer(choice: voice, fallback: AppleSynthesizer(identifier: settings.data.appleVoice))
             }
         }
         error = "That voice isn't set up yet, so Apple's voice is speaking instead."

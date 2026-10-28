@@ -29,7 +29,9 @@ enum RaonLoader {
         eval(vocoder.arrays)
         let tokenizer = try RaonTokenizer(vocabURL: folder.appendingPathComponent("vocab.txt"),
                                           usableCount: dit.textRows - 1)
+        let model = RaonTTS(dit: dit, vocoder: vocoder, tokenizer: tokenizer)
+        model.warmUp()
         Memory.clearCache()
-        return RaonTTS(dit: dit, vocoder: vocoder, tokenizer: tokenizer)
+        return model
     }
 }

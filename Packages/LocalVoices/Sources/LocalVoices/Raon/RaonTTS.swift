@@ -42,6 +42,17 @@ public final class RaonTTS: SpeechGenerationModel, @unchecked Sendable {
         self.tokenizer = tokenizer
     }
 
+    /// One network pass and a short vocoder run on silence, so the GPU kernels are compiled while
+    /// loading rather than during the first sentence (Raon has no built-in voice for the engine's warm-up).
+    func warmUp() {
+        let frames = 256
+        let silence = MLXArray.zeros([1, frames, RaonAudio.melBins])
+        let tokens = tokenizer.encode("hi.")
+        let context = dit.context(referenceMel: silence, text: dit.embedText(tokens, frames: frames, drop: false),
+                                  nullText: dit.embedText(tokens, frames: frames, drop: true))
+        eval(dit.velocity(silence, time: 0.5, context: context), vocoder(silence[0..., 0 ..< 32, 0...]))
+    }
+
     public func generate(text: String, voice: String?, refAudio: sending MLXArray?, refText: String?, language: String?,
                          generationParameters: GenerateParameters) async throws -> sending MLXArray {
         let audio = try synthesize(text: text, reference: refAudio, transcript: refText, seed: generationParameters.seed)

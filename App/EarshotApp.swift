@@ -80,7 +80,9 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active: arrived()
-            case .background: leftAt = Date()
+            case .background:
+                leftAt = Date()
+                if conversation.phase == .idle { AudioIO.shared.suspend() }
             default: break
             }
         }

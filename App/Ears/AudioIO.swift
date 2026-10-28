@@ -16,17 +16,23 @@ final class AudioIO {
     let speechFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
 
     private(set) var isRunning = false
+    /// The session stays active between turns while the app is in front: an engine started right
+    /// after the session is activated again hears only silence.
+    private var sessionActive = false
     private var isWired = false
     private var converter: AVAudioConverter?
     private var monoFormat: AVAudioFormat?
 
     func start() throws {
         guard !isRunning else { return }
-        let session = AVAudioSession.sharedInstance()
-        // Default mode, not voiceChat: voiceChat makes iOS treat the app as a call in progress. Echo
-        // cancellation comes from voice processing on the engine below, which works in either mode.
-        try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
-        try session.setActive(true)
+        if !sessionActive {
+            let session = AVAudioSession.sharedInstance()
+            // Default mode, not voiceChat: voiceChat makes iOS treat the app as a call in progress.
+            // Echo cancellation comes from voice processing on the engine below, in either mode.
+            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
+            try session.setActive(true)
+            sessionActive = true
+        }
 
         if !isWired {
             // Voice processing changes the formats of both I/O nodes, so it comes before any wiring.
@@ -74,12 +80,20 @@ final class AudioIO {
         try? start()
     }
 
+    /// Stops the microphone and playback. The session stays active for the next turn.
     func stop() {
         guard isRunning else { return }
         player.stop()
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         isRunning = false
+    }
+
+    /// For the background: stops everything and lets other apps' audio come back.
+    func suspend() {
+        stop()
+        guard sessionActive else { return }
+        sessionActive = false
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 

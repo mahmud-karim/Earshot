@@ -202,7 +202,12 @@ final class Audio8MiniModel: Module, SpeechGenerationModel, @unchecked Sendable 
         let budget = min(p.maxTokens ?? 512, config.maxSeqLen - width)
         let cache = model.slow.makeCache()
         var key = MLXRandom.key(p.seed ?? UInt64.random(in: 0...UInt64.max))
+        let traceStart = Date()
         var (logits, hidden) = model.slowStep(prompt, cache: cache)
+        eval(logits, hidden)
+        print(String(format: "TRACE prefill %ld tokens %.3f s, peak %ld MB", width, Date().timeIntervalSince(traceStart), Memory.peakMemory / 1_000_000))
+        let loopStart = Date()
+        defer { print(String(format: "TRACE loop %.3f s, peak %ld MB", Date().timeIntervalSince(loopStart), Memory.peakMemory / 1_000_000)) }
         var previous: MLXArray?
         var frames: [MLXArray] = []
         for step in 0..<budget {
@@ -249,8 +254,11 @@ final class Audio8MiniModel: Module, SpeechGenerationModel, @unchecked Sendable 
         }
         let prompt = preparePrompt(prefix: prefix, suffix: suffix, referenceCodes: referenceCodes)
         let codes = try generateCodes(prompt: prompt, parameters: parameters)
+        eval(codes)
+        let decodeStart = Date()
         let audio = codec.decode(codes)
         eval(audio)
+        print(String(format: "TRACE decode %ld frames %.3f s, peak %ld MB, active %ld MB", codes.shape[2], Date().timeIntervalSince(decodeStart), Memory.peakMemory / 1_000_000, Memory.activeMemory / 1_000_000))
         return (audio, prompt.shape[2], codes.shape[2])
     }
 
@@ -311,6 +319,7 @@ final class Audio8MiniModel: Module, SpeechGenerationModel, @unchecked Sendable 
         }
         try model.update(parameters: ModuleParameters.unflattened(sanitize(weights)), verify: .all)
         eval(model)
+        print(String(format: "TRACE loaded, active %ld MB, peak %ld MB", Memory.activeMemory / 1_000_000, Memory.peakMemory / 1_000_000))
         let tokenizer = try await AutoTokenizer.from(modelFolder: directory)
         for (token, expected) in [("<|semantic:0|>", config.semanticBeginID),
                                   ("<|semantic:\(config.codebookSize - 1)|>", config.semanticEndID)] {

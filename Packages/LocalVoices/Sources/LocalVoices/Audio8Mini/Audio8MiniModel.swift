@@ -101,6 +101,7 @@ final class Audio8MiniModel: Module, SpeechGenerationModel, @unchecked Sendable 
     let model: Audio8MiniBackbone
     let codec: Audio8MiniCodec
     private var tokenizer: (any Tokenizer)?
+    var float32Codec: Audio8MiniCodec?
 
     var sampleRate: Int { config.codecSampleRate }
     var defaultGenerationParameters: GenerateParameters {
@@ -271,6 +272,12 @@ final class Audio8MiniModel: Module, SpeechGenerationModel, @unchecked Sendable 
         let audio = codec.decode(codes)
         eval(audio)
         print(String(format: "TRACE decode %ld frames %.3f s, peak %ld MB, active %ld MB", codes.shape[2], Date().timeIntervalSince(decodeStart), Memory.peakMemory / 1_000_000, Memory.activeMemory / 1_000_000))
+        if let float32Codec {
+            let exact = float32Codec.decode(codes)
+            let noise = sum(square(exact - audio)).item(Float.self), signal = sum(square(exact)).item(Float.self)
+            print(String(format: "TRACE float16 codec SNR %.1f dB", 10 * log10(signal / max(noise, 1e-12))))
+            self.float32Codec = nil
+        }
         return (audio, prompt.shape[2], codes.shape[2])
     }
 
@@ -329,7 +336,20 @@ final class Audio8MiniModel: Module, SpeechGenerationModel, @unchecked Sendable 
             guard weights[key] == nil else { throw LocalVoiceError("Audio8 has the weight \(key) twice.") }
             weights[key] = value
         }
+        // The codec ships in Float32 (1.35 GB). Half precision halves that and its activations, which
+        // decide both the decode time and the peak memory of a sentence.
+        var codecFloat32: [String: MLXArray] = [:]
+        for (key, value) in weights where key.hasPrefix("codec.") && value.dtype == .float32 {
+            codecFloat32[key] = value
+            weights[key] = value.asType(.float16)
+        }
+        model.codec.computeType = .float16
         try model.update(parameters: ModuleParameters.unflattened(sanitize(weights)), verify: .all)
+        // TEMPORARY: a Float32 codec to measure what half precision costs in quality.
+        let check = Audio8MiniCodec(config)
+        let checkWeights = Dictionary(uniqueKeysWithValues: sanitize(codecFloat32).map { (String($0.key.dropFirst("codec.".count)), $0.value) })
+        try check.update(parameters: ModuleParameters.unflattened(checkWeights), verify: .all)
+        eval(check)
         eval(model)
         print(String(format: "TRACE loaded, active %ld MB, peak %ld MB", Memory.activeMemory / 1_000_000, Memory.peakMemory / 1_000_000))
         let tokenizer = try await AutoTokenizer.from(modelFolder: directory)
@@ -340,6 +360,18 @@ final class Audio8MiniModel: Module, SpeechGenerationModel, @unchecked Sendable 
             }
         }
         model.tokenizer = tokenizer
+        model.warmUp()
+        model.float32Codec = check
         return model
+    }
+
+    /// The first generation compiles the GPU kernels and takes several times longer than the rest.
+    /// Audio8 has no built-in voice for the engine's own warm-up, so loading runs every path once
+    /// here: a reference encode, a short prompt with that reference, and a decode, capped to a few frames.
+    private func warmUp() {
+        let silence = MLXArray.zeros([sampleRate])
+        _ = try? run(text: "Hi.", reference: silence, transcript: "Hi.",
+                     parameters: .init(maxTokens: 8, temperature: 0.7, topP: 0.9, topK: 50, seed: 0))
+        Memory.clearCache()
     }
 }

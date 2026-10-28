@@ -230,12 +230,14 @@ final class Audio8MiniCodec: Module {
     init(_ config: Audio8MiniConfig) {
         encoder = Audio8MiniCodecEncoder(); quantizer = Audio8MiniDownsampleQuantizer(config); decoder = Audio8MiniCodecDecoder()
     }
+    /// The type the codec computes in, matching its loaded weights. Audio comes back as Float32.
+    var computeType: DType = .float32
     func encode(_ audio: MLXArray) -> MLXArray {
-        let waveform = audio.reshaped([1, audio.size, 1])
+        let waveform = audio.asType(computeType).reshaped([1, audio.size, 1])
         let right = (2048 - audio.size % 2048) % 2048
         return quantizer.encode(encoder(padded(waveform, widths: [0, .init((0, right)), 0]))).asType(.int32)
     }
     func decode(_ codes: MLXArray) -> MLXArray {
-        decoder(quantizer.decode(codes))[0, 0..., 0]
+        decoder(quantizer.decode(codes))[0, 0..., 0].asType(.float32)
     }
 }

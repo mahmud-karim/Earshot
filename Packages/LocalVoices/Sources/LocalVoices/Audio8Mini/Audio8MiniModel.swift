@@ -210,18 +210,17 @@ final class Audio8MiniModel: Module, SpeechGenerationModel, @unchecked Sendable 
         defer { print(String(format: "TRACE loop %.3f s, peak %ld MB", Date().timeIntervalSince(loopStart), Memory.peakMemory / 1_000_000)) }
         var previous: MLXArray?
         var frames: [MLXArray] = []
-        for step in 0..<budget {
-            try Task.checkCancellation()
+        func drawSemantic() -> (semantic: MLXArray, fastKey: MLXArray) {
             let keys = MLXRandom.split(key: key, into: 4)
             key = keys[3]
-            let semantic = sampleSemantic(logits, p: p, keys: (keys[0], keys[1]), previous: previous)
-            // The one sync per frame. The previous frame's codebooks and slow step are computed here
-            // too, since this draw depends on them.
-            eval(semantic)
-            // In the compact space EOS is the head's last column, not the tokenizer's eos_token_id.
-            if semantic.item(Int32.self) == Int32(config.semanticEOS) { break }
-            let frame = generateCodebooks(hidden: hidden, semantic: semantic, p: p, key: keys[2])
-            frames.append(frame)
+            return (sampleSemantic(logits, p: p, keys: (keys[0], keys[1]), previous: previous), keys[2])
+        }
+        var pending = drawSemantic()
+        asyncEval(pending.semantic)
+        for step in 0..<budget {
+            try Task.checkCancellation()
+            let (semantic, fastKey) = pending
+            let frame = generateCodebooks(hidden: hidden, semantic: semantic, p: p, key: fastKey)
             // Like the reference, the history starts as zeros after the first frame and only then
             // takes in semantic codes.
             if let window = previous {
@@ -229,11 +228,24 @@ final class Audio8MiniModel: Module, SpeechGenerationModel, @unchecked Sendable 
             } else {
                 previous = MLXArray.zeros([1, config.rasWindowSize], dtype: .int32)
             }
-            guard step + 1 < budget else { break }
-            // The prompt rows are full-vocabulary ids, so the slow stack gets the semantic code back
-            // in that space.
-            let column = concatenated([(semantic + Int32(config.semanticBeginID)).reshaped([1, 1]), frame], axis: 1)
-            (logits, hidden) = model.slowStep(column.expandedDimensions(axis: 2), cache: cache)
+            let more = step + 1 < budget
+            if more {
+                // Queue the next frame before reading this one's token, so the GPU never waits for
+                // the CPU to build a graph. If this token turns out to be EOS, that work is dropped.
+                // The prompt rows are full-vocabulary ids, so the slow stack gets the semantic code
+                // back in that space, and EOS as the tokenizer's eos_token_id (as arktts.py does);
+                // left as is, EOS would index one past the end of the text embedding.
+                let fullID = which(semantic .== config.semanticEOS, MLXArray(Int32(config.eosTokenID)),
+                                   semantic + Int32(config.semanticBeginID))
+                let column = concatenated([fullID.reshaped([1, 1]), frame], axis: 1)
+                (logits, hidden) = model.slowStep(column.expandedDimensions(axis: 2), cache: cache)
+                pending = drawSemantic()
+                asyncEval(pending.semantic)
+            }
+            // In the compact space EOS is the head's last column, not the tokenizer's eos_token_id.
+            if semantic.item(Int32.self) == Int32(config.semanticEOS) { break }
+            frames.append(frame)
+            if !more { break }
         }
         guard !frames.isEmpty else { throw LocalVoiceError("Audio8 made no audio for this text.") }
         return stacked(frames, axis: 2)

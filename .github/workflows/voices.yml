@@ -81,7 +81,7 @@ jobs:
       - name: Check the words with Whisper
         run: |
           python -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/pip" install -q faster-whisper
+          "$RUNNER_TEMP/venv/bin/pip" install -q "faster-whisper==1.2.1" "av==17.1.0" "ctranslate2==4.8.4"
           "$RUNNER_TEMP/venv/bin/python" Scripts/check_speech.py "$RUNNER_TEMP/out"
           cat "$RUNNER_TEMP/out/summary.md" >> "$GITHUB_STEP_SUMMARY"
 

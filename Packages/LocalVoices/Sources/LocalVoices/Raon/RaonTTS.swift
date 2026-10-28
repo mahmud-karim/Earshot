@@ -21,7 +21,7 @@ public struct RaonOptions: Sendable {
 /// Raon-OpenTTS (KRAFTON): zero-shot speech in the voice of a reference recording. Follows
 /// `infer_process` in `f5_tts/infer/utils_infer.py` with the settings of `infer_cli.py`.
 public final class RaonTTS: SpeechGenerationModel, @unchecked Sendable {
-    public static let defaultSteps = 16
+    public static let defaultSteps = 32
 
     public let sampleRate = RaonAudio.sampleRate
     public var defaultGenerationParameters: GenerateParameters { GenerateParameters(temperature: 0) }

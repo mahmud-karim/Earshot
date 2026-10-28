@@ -23,7 +23,9 @@ final class AudioIO {
     func start() throws {
         guard !isRunning else { return }
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
+        // Default mode, not voiceChat: voiceChat makes iOS treat the app as a call in progress. Echo
+        // cancellation comes from voice processing on the engine below, which works in either mode.
+        try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
         try session.setActive(true)
 
         if !isWired {
@@ -32,6 +34,11 @@ final class AudioIO {
             engine.attach(player)
             engine.connect(player, to: engine.mainMixerNode, format: playFormat)
             isWired = true
+            // Turning voice processing on, a route change or an interruption reconfigures the I/O
+            // and stops the engine without saying so to the tap. Start it again.
+            NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+                self?.restartAfterChange()
+            }
         }
 
         let input = engine.inputNode
@@ -50,6 +57,13 @@ final class AudioIO {
         engine.prepare()
         try engine.start()
         isRunning = true
+    }
+
+    private func restartAfterChange() {
+        guard isRunning else { return }
+        isRunning = false
+        engine.inputNode.removeTap(onBus: 0)
+        try? start()
     }
 
     func stop() {

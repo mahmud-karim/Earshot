@@ -69,7 +69,9 @@ struct ListeningView: View {
     }
 
     @ViewBuilder private var words: some View {
-        let text = conversation.liveText
+        // The newest words matter; a long question shows its end.
+        let whole = conversation.liveText
+        let text = whole.count > 180 ? "…" + whole.suffix(170) : whole
         Group {
             if let status = conversation.status {
                 Text(status).foregroundStyle(Theme.muted)
@@ -77,7 +79,7 @@ struct ListeningView: View {
                 Text(conversation.transcriberGivesLiveText ? "Go ahead, I’m listening" : "Listening… your words appear when you pause")
                     .foregroundStyle(Theme.muted)
             } else {
-                (Text(text).foregroundStyle(Theme.text) + Text(" ▍").foregroundStyle(Theme.clay))
+                Text("\(Text(text).foregroundStyle(Theme.text))\(Text(" ▍").foregroundStyle(Theme.clay))")
             }
         }
         .font(.system(size: 28))

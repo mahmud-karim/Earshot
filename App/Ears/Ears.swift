@@ -37,7 +37,7 @@ final class AppleTranscriber: Transcriber {
     private let captured = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
 
     func start() async throws {
-        guard await SpeechTranscriber.isAvailable else {
+        guard SpeechTranscriber.isAvailable else {
             throw BrainError(message: "Apple speech isn't supported on this iPhone. Pick other Ears in Models.")
         }
         guard let locale = await AppleTranscriber.locale() else {
@@ -52,12 +52,12 @@ final class AppleTranscriber: Transcriber {
         }
 
         let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber], considering: captured) ?? captured
-        lock.lock()
-        analyzerFormat = format
-        converter = format == captured ? nil : AVAudioConverter(from: captured, to: format)
-        finalText = ""
-        volatileText = ""
-        lock.unlock()
+        lock.withLock {
+            analyzerFormat = format
+            converter = format == captured ? nil : AVAudioConverter(from: captured, to: format)
+            finalText = ""
+            volatileText = ""
+        }
 
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         let (inputs, continuation) = AsyncStream<AnalyzerInput>.makeStream()
@@ -69,10 +69,10 @@ final class AppleTranscriber: Transcriber {
             } catch {}
         }
         try await analyzer.start(inputSequence: inputs)
-        lock.lock()
-        self.analyzer = analyzer
-        self.input = continuation
-        lock.unlock()
+        lock.withLock {
+            self.analyzer = analyzer
+            self.input = continuation
+        }
     }
 
     func feed(_ samples: [Float]) {
@@ -110,19 +110,17 @@ final class AppleTranscriber: Transcriber {
     }
 
     func finish() async throws -> String {
-        lock.lock()
-        let analyzer = self.analyzer
-        let input = self.input
-        self.input = nil
-        lock.unlock()
+        let (analyzer, input) = lock.withLock { () -> (SpeechAnalyzer?, AsyncStream<AnalyzerInput>.Continuation?) in
+            let pair = (self.analyzer, self.input)
+            self.input = nil
+            return pair
+        }
         input?.finish()
         if let analyzer {
             try? await analyzer.finalizeAndFinishThroughEndOfInput()
         }
         await relay?.value
-        lock.lock()
-        defer { lock.unlock() }
-        return (finalText + volatileText).trimmingCharacters(in: .whitespacesAndNewlines)
+        return lock.withLock { (finalText + volatileText).trimmingCharacters(in: .whitespacesAndNewlines) }
     }
 
     func cancel() {
@@ -133,7 +131,7 @@ final class AppleTranscriber: Transcriber {
         self.analyzer = nil
         lock.unlock()
         relay?.cancel()
-        Task { try? await analyzer?.cancelAndFinishNow() }
+        Task { await analyzer?.cancelAndFinishNow() }
     }
 
     private func take(_ text: String, isFinal: Bool) {
@@ -183,10 +181,10 @@ final class UploadTranscriber: Transcriber {
     }
 
     func start() async throws {
-        lock.lock()
-        samples = []
-        cancelled = false
-        lock.unlock()
+        lock.withLock {
+            samples = []
+            cancelled = false
+        }
     }
 
     func feed(_ new: [Float]) {
@@ -203,9 +201,7 @@ final class UploadTranscriber: Transcriber {
     }
 
     func finish() async throws -> String {
-        lock.lock()
-        let recorded = samples
-        lock.unlock()
+        let recorded = lock.withLock { samples }
         guard recorded.count > 8_000 else { return "" }
 
         let boundary = "earshot-\(UUID().uuidString)"

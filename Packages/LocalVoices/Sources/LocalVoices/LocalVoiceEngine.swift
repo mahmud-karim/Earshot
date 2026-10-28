@@ -106,6 +106,14 @@ public final class LocalVoiceEngine: @unchecked Sendable {
         case .raon:
             speech = try await RaonLoader.load(folder)
         }
+        // The first generation compiles the GPU kernels and takes several times longer than the
+        // rest. A throwaway word here moves that cost into loading, which happens while the user
+        // is still talking.
+        if let voice = model.info.voices.first?.id {
+            _ = try? await speech.generate(text: "Hi.", voice: voice, refAudio: nil, refText: nil,
+                                           language: Self.language(model),
+                                           generationParameters: speech.defaultGenerationParameters)
+        }
         lock.withLock { loaded = (model, speech) }
         return speech
     }

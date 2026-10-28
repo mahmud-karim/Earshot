@@ -1,0 +1,39 @@
+name: xtool SDK
+
+# Builds xtool's Darwin Swift SDK from the runner's Xcode for a Linux x86_64 host, encrypted with
+# a key only the owner holds (secret XTOOL_SDK_KEY). Lives on its own branch; it is not part of the app.
+
+on:
+  push:
+    branches: [tools/xtool-sdk]
+
+permissions:
+  contents: read
+
+jobs:
+  sdk:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Build the SDK
+        env:
+          KEY: ${{ secrets.XTOOL_SDK_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$KEY"
+          curl -fsSL https://github.com/xtool-org/xtool/releases/download/1.24.0/xtool.app.zip -o xtool.zip
+          ditto -x -k xtool.zip .
+          XT="$PWD/xtool.app/Contents/MacOS/xtool"
+          "$XT" --version
+          ls -d /Applications/Xcode*.app
+          "$XT" sdk build /Applications/Xcode_26.6.app "$RUNNER_TEMP/sdk" --arch x86_64
+          ls -la "$RUNNER_TEMP/sdk"
+          tar -C "$RUNNER_TEMP/sdk" -cf - . | zstd -T0 -10 | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:KEY -out "$RUNNER_TEMP/darwin-sdk.tar.zst.enc"
+          ls -la "$RUNNER_TEMP/darwin-sdk.tar.zst.enc"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xtool-sdk-encrypted
+          path: ${{ runner.temp }}/darwin-sdk.tar.zst.enc
+          retention-days: 3
+          compression-level: 0

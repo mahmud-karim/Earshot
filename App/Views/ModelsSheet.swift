@@ -1,9 +1,11 @@
 import AVFoundation
+import LocalVoices
 import SwiftUI
 
 enum ModelsRoute: Hashable {
     case openRouterModel, openAIModel, pcModel
     case appleVoices, openAIVoices, elevenLabsVoice, pcVoice
+    case onDeviceVoices, myVoice
 }
 
 /// Brain, ears and voice for the current preset.
@@ -140,6 +142,9 @@ struct ModelsSheet: View {
         return VStack(spacing: 10) {
             GroupLabel(text: "Voice · text to speech")
             RowGroup {
+                voiceRow("On this iPhone · " + (OnDeviceVoice(settings.data.onDeviceVoice)?.label ?? "Pocket TTS"), onDeviceNote,
+                         VoiceChoice(kind: .onDevice, voice: settings.data.onDeviceVoice), selected: current.kind == .onDevice, route: .onDeviceVoices)
+                Hairline()
                 voiceRow("Apple · " + (AppleVoices.name(for: settings.data.appleVoice) ?? "Default"), "Free · instant",
                          VoiceChoice(kind: .apple, voice: settings.data.appleVoice), selected: current.kind == .apple, route: .appleVoices)
                 Hairline()
@@ -193,6 +198,11 @@ struct ModelsSheet: View {
         }
     }
 
+    private var onDeviceNote: String {
+        guard let voice = OnDeviceVoice(settings.data.onDeviceVoice) else { return "Free · private · works offline" }
+        return LocalModelStore.shared.isDownloaded(voice.model) ? "Free · private · works offline" : "Download it first"
+    }
+
     private func keyNote(_ key: KeyName, _ model: String) -> String {
         settings.key(key) == nil ? "Add a key in Settings · \(model)" : model
     }
@@ -225,6 +235,10 @@ struct ModelsSheet: View {
         case .pcVoice:
             TextPage(title: "Kokoro voice", hint: "A Kokoro voice name, like af_heart, af_bella or am_michael.",
                      text: voiceBinding(\.pcVoice, kind: .pc))
+        case .onDeviceVoices:
+            OnDeviceVoicesPage()
+        case .myVoice:
+            MyVoicePage()
         }
     }
 

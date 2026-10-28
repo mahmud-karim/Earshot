@@ -21,6 +21,7 @@ struct SettingsData: Codable, Equatable {
     var openAIVoice = "coral"
     var elevenLabsVoiceID = ""
     var pcVoice = "af_heart"
+    var onDeviceVoice = "pocket/alba"
     /// Host name or address of the PC, e.g. my-pc.tail1234.ts.net. Empty when there is none.
     var pcAddress = ""
     /// OpenAI-compatible chat server on the PC: Ollama is 11434, LM Studio 1234.

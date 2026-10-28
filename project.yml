@@ -23,12 +23,19 @@ settings:
     CODE_SIGNING_REQUIRED: "NO"
     CODE_SIGN_IDENTITY: ""
 
+packages:
+  LocalVoices:
+    path: Packages/LocalVoices
+
 targets:
   Earshot:
     type: application
     platform: iOS
     sources:
       - path: App
+    dependencies:
+      - package: LocalVoices
+        product: LocalVoices
     info:
       path: Generated/Earshot-Info.plist
       properties:

@@ -1,3 +1,4 @@
+import LocalVoices
 import SwiftUI
 import UIKit
 
@@ -82,7 +83,11 @@ struct RootView: View {
             case .active: arrived()
             case .background:
                 leftAt = Date()
-                if conversation.phase == .idle { AudioIO.shared.suspend() }
+                if conversation.phase == .idle {
+                    AudioIO.shared.suspend()
+                    // A voice model can hold gigabytes; iOS ends background apps that keep that much.
+                    Task { await LocalVoiceEngine.shared.unload() }
+                }
             default: break
             }
         }

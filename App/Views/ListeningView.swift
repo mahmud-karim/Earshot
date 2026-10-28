@@ -40,7 +40,7 @@ struct ListeningView: View {
                         conversation.cancelListening()
                         typeInstead()
                     }
-                    Button(action: conversation.sendNow) {
+                    Button { conversation.sendNow() } label: {
                         Image(systemName: "arrow.up").font(.system(size: 28, weight: .semibold))
                             .foregroundStyle(Theme.onClay).frame(width: 80, height: 80)
                             .background(Circle().fill(Theme.clay))

@@ -194,13 +194,14 @@ final class Conversation: ObservableObject {
         } catch {
             guard transcriber === made else { return }
             self.error = error.localizedDescription
-            cancelListening()
+            cancelListening(reason: "start failed")
         }
     }
 
     /// Stops listening and sends what was heard.
-    func sendNow() {
+    func sendNow(reason: String = "button") {
         guard phase == .listening, let current = transcriber else { return }
+        talkLog.notice("send (\(reason, privacy: .public))")
         phase = .transcribing
         router.detach()
         transcriberReady = false
@@ -228,7 +229,8 @@ final class Conversation: ObservableObject {
         }
     }
 
-    func cancelListening() {
+    func cancelListening(reason: String = "button") {
+        talkLog.notice("cancel listening (\(reason, privacy: .public)) in phase \(String(describing: self.phase), privacy: .public)")
         transcriber?.cancel()
         transcriber = nil
         transcriberReady = false
@@ -266,9 +268,9 @@ final class Conversation: ObservableObject {
             let silence = now.timeIntervalSince(lastVoice)
             let hasWords = !transcriberGivesLiveText || !liveText.isEmpty
             if heard && hasWords && silence > settings.data.pauseSeconds {
-                sendNow()
+                sendNow(reason: "pause")
             } else if !heard && now.timeIntervalSince(listenStart) > 10 {
-                cancelListening()
+                cancelListening(reason: "nothing heard")
             }
         case .speaking where settings.data.interruptByTalking:
             let loud = level > max(noiseFloor + 15, -40)
@@ -569,7 +571,7 @@ final class Conversation: ObservableObject {
     }
 
     func cancelEverything() {
-        if phase == .listening || phase == .transcribing { cancelListening() }
+        if phase == .listening || phase == .transcribing { cancelListening(reason: "chat changed") }
         interruptReply()
         stopAudioIfIdle()
     }

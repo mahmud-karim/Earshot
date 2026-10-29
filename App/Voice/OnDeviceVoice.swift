@@ -191,6 +191,9 @@ final class SampleRecorder: Transcriber {
 
     var seconds: Double { lock.withLock { Double(samples.count) / 16_000 } }
 
+    /// Everything heard so far, for checking it rather than saving it.
+    var recorded: [Float] { lock.withLock { samples } }
+
     /// Writes the recording, trimmed of leading and trailing quiet.
     func finish() async throws -> String {
         let all = lock.withLock { samples }

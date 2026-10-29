@@ -33,6 +33,12 @@ struct ListeningView: View {
             Spacer()
 
             VStack(spacing: 18) {
+                if let voice = conversation.loadingVoice {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.mini).tint(Theme.muted)
+                        Text("Loading \(voice) voice…").font(.system(size: 13)).foregroundStyle(Theme.secondary)
+                    }
+                }
                 Text(conversation.paused ? "Paused · tap play to keep going" : "Sends when you pause · tap to send now")
                     .font(.system(size: 13)).foregroundStyle(Theme.muted)
                 HStack(spacing: 28) {

@@ -27,6 +27,12 @@ enum BrainEvent {
     case searching(webSearch: Bool)
     /// A page the answer is drawn from.
     case source(title: String, url: String)
+    /// Hermes started a tool, e.g. "terminal" running "date".
+    case working(tool: String, label: String)
+    /// Hermes wants the user's go-ahead before a risky step. The turn waits until it is answered.
+    case approval(HermesApproval)
+    /// Hermes accepted the question as a run on the server, which carries on without the phone.
+    case runStarted(String)
 }
 
 protocol Brain {
@@ -294,9 +300,27 @@ struct OpenAICompatibleBrain: Brain {
             let text = try await SSE.collect(bytes)
             throw BrainError(message: SSE.readableError(status: status, body: text))
         }
+        // Hermes adds named events (tool progress, approvals) between the standard chunks.
+        var eventName = ""
         for try await line in bytes.lines {
             if line.hasPrefix("data: [DONE]") { break }
+            if line.hasPrefix("event:") {
+                eventName = line.dropFirst(6).trimmingCharacters(in: .whitespaces)
+                continue
+            }
             guard let event = SSE.json(line) else { continue }
+            defer { eventName = "" }
+            if eventName == "hermes.tool.progress" {
+                if event["status"] as? String == "running", let tool = event["tool"] as? String {
+                    continuation.yield(.working(tool: tool, label: event["label"] as? String ?? tool))
+                }
+                continue
+            }
+            if eventName == "approval.request" {
+                if let approval = HermesApproval(event) { continuation.yield(.approval(approval)) }
+                continue
+            }
+            if !eventName.isEmpty { continue }
             if let error = event["error"] as? [String: Any] {
                 throw BrainError(message: error["message"] as? String ?? "The stream failed.")
             }

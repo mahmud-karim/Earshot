@@ -1,8 +1,9 @@
 // swift-tools-version:6.2
 import PackageDescription
 
-// Voices that run on the iPhone itself. The app links the LocalVoices library; voice-check is a small
-// macOS tool that CI uses to make each voice speak and to time it, before anything reaches the phone.
+// Speech models that run on the iPhone itself: the voices, and Fluid Speech Mini for the ears. The app
+// links the LocalVoices library; voice-check is a small macOS tool that CI uses to make each voice speak
+// and to time it, before anything reaches the phone.
 let package = Package(
     name: "LocalVoices",
     platforms: [.macOS(.v14), .iOS(.v17)],
@@ -15,7 +16,9 @@ let package = Package(
         .package(url: "https://github.com/Blaizzy/mlx-audio-swift.git", revision: "fe2c182f4da8115fe2b6b99c9a4d2048fbf9b1e6"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.32.3")),
         // Already in the graph through mlx-audio-swift; named here because Audio8 0.1B loads its tokenizer.
-        .package(url: "https://github.com/huggingface/swift-transformers.git", .upToNextMajor(from: "1.1.6"))
+        .package(url: "https://github.com/huggingface/swift-transformers.git", .upToNextMajor(from: "1.1.6")),
+        // Runs Fluid Speech Mini (Parakeet format) on the Neural Engine. Pinned as in LiveCue Remake.
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.15.6")
     ],
     targets: [
         .target(
@@ -28,7 +31,8 @@ let package = Package(
                 .product(name: "MLXFast", package: "mlx-swift"),
                 .product(name: "MLXFFT", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift"),
-                .product(name: "Tokenizers", package: "swift-transformers")
+                .product(name: "Tokenizers", package: "swift-transformers"),
+                .product(name: "FluidAudio", package: "FluidAudio")
             ],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),

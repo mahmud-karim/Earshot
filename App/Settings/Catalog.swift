@@ -9,6 +9,8 @@ enum BrainKind: String, Codable, CaseIterable {
     case openRouter
     case openAI
     case pc
+    /// The Hermes agent on the user's server: it answers and can act, with its own tools.
+    case hermes
 }
 
 struct BrainChoice: Codable, Equatable, Hashable {
@@ -17,6 +19,7 @@ struct BrainChoice: Codable, Equatable, Hashable {
     var model: String
 
     var label: String {
+        if kind == .hermes { return "Hermes" }
         if kind == .anthropic, let known = Catalog.anthropicModels.first(where: { $0.id == model }) {
             return known.name
         }
@@ -41,6 +44,8 @@ enum Effort: String, Codable, CaseIterable {
 
 enum EarsKind: String, Codable, CaseIterable {
     case apple
+    case fluid
+    case server
     case openAI
     case pc
 }
@@ -122,6 +127,7 @@ enum Catalog {
         case .openRouter: return "OpenRouter"
         case .openAI: return "OpenAI"
         case .pc: return "Your PC"
+        case .hermes: return "Hermes"
         }
     }
 

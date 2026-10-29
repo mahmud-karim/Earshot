@@ -19,12 +19,15 @@ struct ChatView: View {
                             if turn.isUser {
                                 UserBubble(turn: turn)
                             } else {
-                                ReplyBlock(text: turn.text, model: turn.modelLabel ?? "", failed: turn.failed,
+                                // An empty saved answer (a stopped reply, before this was handled) would show the waiting dots forever.
+                                ReplyBlock(text: turn.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No answer was saved." : turn.text,
+                                           model: turn.modelLabel ?? "", failed: turn.failed,
                                            meta: meta(turn), retry: retryAction(turn),
                                            replay: replayControl(turn), sources: turn.sources ?? [])
                             }
                         }
-                        if conversation.phase == .thinking || !conversation.reply.isEmpty {
+                        if conversation.phase == .thinking || !conversation.reply.isEmpty
+                            || (conversation.phase == .speaking && conversation.replaying == nil) {
                             ReplyBlock(text: conversation.reply, model: conversation.replyModel, failed: false, meta: nil, retry: nil, replay: nil,
                                        sources: conversation.replySources)
                         }
@@ -44,6 +47,12 @@ struct ChatView: View {
             VStack(spacing: 14) {
                 if let error = conversation.error {
                     ErrorBanner(text: error) { conversation.error = nil }
+                }
+                if let approval = conversation.approval {
+                    ApprovalCard(approval: approval)
+                }
+                if conversation.chat?.pendingRun != nil && conversation.phase == .idle {
+                    PendingRunCard()
                 }
                 if conversation.phase == .thinking || conversation.phase == .speaking {
                     StatusBar()
@@ -165,7 +174,7 @@ struct ReplyBlock: View {
                 Circle().fill(failed ? Theme.danger : Theme.clay).frame(width: 10, height: 10)
                 Text(model).font(.system(size: 13)).foregroundStyle(Theme.muted)
             }
-            if text.isEmpty {
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 ThinkingDots()
             }
             ForEach(Array(ReplyBlock.segments(text).enumerated()), id: \.offset) { _, segment in
@@ -329,6 +338,70 @@ struct ThinkingDots: View {
     }
 }
 
+/// A Hermes run still working on the server while Earshot can't follow it, e.g. offline.
+struct PendingRunCard: View {
+    @EnvironmentObject var conversation: Conversation
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ProgressView().tint(Theme.muted)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Hermes is still working on this").font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.text)
+                Text("The answer shows up here once Earshot can reach the server.")
+                    .font(.system(size: 13)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            Button("Check") { conversation.resumePendingRun() }
+                .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.clay)
+                .buttonStyle(.plain)
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 18).fill(Theme.surface))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Theme.border, lineWidth: 0.5))
+    }
+}
+
+/// Hermes asking before a risky step. Saying "yes" or "no" answers it too.
+struct ApprovalCard: View {
+    @EnvironmentObject var conversation: Conversation
+    let approval: HermesApproval
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Hermes wants your OK").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
+            if !approval.description.isEmpty {
+                Text(approval.description).font(.system(size: 14)).foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !approval.command.isEmpty {
+                Text(approval.command).font(.system(size: 13, design: .monospaced)).foregroundStyle(Theme.textBody)
+                    .lineLimit(4).textSelection(.enabled)
+                    .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Theme.raised))
+            }
+            HStack(spacing: 12) {
+                Button { conversation.answerApproval("deny") } label: {
+                    Text("Don't allow").font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.text)
+                        .frame(maxWidth: .infinity).frame(height: 44)
+                        .overlay(Capsule().stroke(Theme.border, lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+                Button { conversation.answerApproval("once") } label: {
+                    Text("Allow").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.onClay)
+                        .frame(maxWidth: .infinity).frame(height: 44)
+                        .background(Capsule().fill(Theme.clay))
+                }
+                .buttonStyle(.plain)
+            }
+            Text("Or tap the mic and say yes or no. It's turned down if not answered within a minute.")
+                .font(.system(size: 12)).foregroundStyle(Theme.muted)
+        }
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 22).fill(Theme.surface))
+        .overlay(RoundedRectangle(cornerRadius: 22).stroke(Theme.clay.opacity(0.5), lineWidth: 1))
+    }
+}
+
 /// "Speaking · tap to interrupt" with the stop button.
 struct StatusBar: View {
     @EnvironmentObject var conversation: Conversation
@@ -342,9 +415,11 @@ struct StatusBar: View {
                 Circle().fill(Theme.clay).frame(width: 14, height: 14)
             }
             if conversation.phase == .speaking {
-                LevelBars(levels: pulse, barWidth: 3, maxHeight: 24, spacing: 3)
+                // Moving only while sound is coming out; flat in the pauses while the next sentence is made.
+                LevelBars(levels: conversation.sounding ? pulse : Array(repeating: 0.15, count: pulse.count),
+                          barWidth: 3, maxHeight: 24, spacing: 3)
             }
-            Text(conversation.searching ? "Searching the web…" : conversation.phase == .speaking ? "Speaking · tap to interrupt" : "Thinking…")
+            Text(statusText)
                 .font(.system(size: 14)).foregroundStyle(Theme.secondary).lineLimit(1)
             Spacer(minLength: 0)
             Button(action: conversation.stopSpeaking) {
@@ -363,9 +438,20 @@ struct StatusBar: View {
             if conversation.phase == .speaking { conversation.startListening(interrupting: true) }
         }
         .onReceive(timer) { _ in
-            if conversation.phase == .speaking {
+            if conversation.sounding {
                 pulse = pulse.map { _ in Float.random(in: 0.25...1) }
             }
         }
+    }
+
+    private var statusText: String {
+        if conversation.searching { return "Searching the web…" }
+        if conversation.approval != nil { return "Waiting for your OK" }
+        if conversation.sounding { return "Speaking · tap to interrupt" }
+        // Hermes keeps working after its short "On it.": say what it's doing while nothing plays.
+        if let step = conversation.working { return "Working · \(step)" }
+        if conversation.phase == .speaking { return "Speaking · tap to interrupt" }
+        if let voice = conversation.loadingVoice { return "Loading \(voice) voice…" }
+        return conversation.replaying != nil ? "Getting the voice ready…" : "Thinking…"
     }
 }

@@ -67,6 +67,8 @@ enum EarsText {
     static func name(_ kind: EarsKind) -> String {
         switch kind {
         case .apple: return "Apple on-device"
+        case .fluid: return "Fluid Speech Mini"
+        case .server: return "Qwen3-ASR on your PC"
         case .openAI: return "OpenAI"
         case .pc: return "Whisper on your PC"
         }
@@ -91,13 +93,14 @@ struct RoundIcon: View {
 /// "Sonnet 5.5 · Balanced ⌄" — opens Models.
 struct ModelPill: View {
     @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var conversation: Conversation
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                Text(settings.preset.brain.label).font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.text)
-                Text("· " + settings.preset.name).font(.system(size: 14)).foregroundStyle(Theme.muted)
+                Text(conversation.isAgent ? "Hermes" : settings.preset.brain.label).font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.text)
+                Text("· " + (conversation.isAgent ? "shopto-cloud" : settings.preset.name)).font(.system(size: 14)).foregroundStyle(Theme.muted)
                 Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.muted)
             }
             .lineLimit(1)

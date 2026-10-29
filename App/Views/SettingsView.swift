@@ -7,6 +7,7 @@ enum SettingsRoute: Hashable {
     case pcAddress
     case actionButton
     case safari
+    case voiceFilter
 }
 
 struct SettingsView: View {
@@ -49,6 +50,7 @@ struct SettingsView: View {
                              text: $settings.data.pcAddress)
                 case .actionButton: ActionButtonPage()
                 case .safari: SafariPage()
+                case .voiceFilter: VoiceFilterPage()
                 }
             }
         }
@@ -137,9 +139,14 @@ struct SettingsView: View {
         VStack(spacing: 10) {
             GroupLabel(text: "Conversation")
             RowGroup {
-                RowLabel(title: "Listen when it opens", subtitle: "Starts listening when you open Earshot or press the Action Button") {
-                    ClayToggle(isOn: $settings.data.listenOnOpen)
+                RowLabel(title: "Listen from the Action Button", subtitle: "Starts listening when the Action Button opens Earshot. Opening it yourself waits for you to tap the mic.") {
+                    ClayToggle(isOn: $settings.data.listenOnActionButton)
                 }
+                Hairline()
+                NavigationLink(value: SettingsRoute.voiceFilter) {
+                    RowLabel(title: "Only my voice", subtitle: settings.data.voiceFilter ? "On · ignores other voices" : "Voice Isolation, and ignoring other voices") { Chevron() }
+                }
+                .buttonStyle(.plain)
                 Hairline()
                 RowLabel(title: "Hands-free", subtitle: "Keeps listening after each reply") {
                     ClayToggle(isOn: $settings.data.handsFree)

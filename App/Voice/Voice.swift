@@ -14,6 +14,8 @@ protocol Synthesizer {
 final class SpeechQueue {
     var onStart: (() -> Void)?
     var onDone: (() -> Void)?
+    /// True while sound is coming out, false in the gaps while the next sentence is still being made.
+    var onSounding: ((Bool) -> Void)?
     var onError: ((String) -> Void)?
 
     private let synthesizer: Synthesizer
@@ -51,6 +53,10 @@ final class SpeechQueue {
         pending.removeAll()
         loop?.cancel()
         AudioIO.shared.stopPlayback()
+        if outstanding > 0 {
+            outstanding = 0
+            onSounding?(false)
+        }
         drained?.resume()
         drained = nil
     }
@@ -70,12 +76,13 @@ final class SpeechQueue {
             do {
                 let buffers = try await next.value
                 guard !stopped else { break }
-                if !started {
+                if !started && !buffers.isEmpty {
                     started = true
                     onStart?()
                 }
                 // Scheduled at once rather than one by one, so there is no gap between buffers.
                 for buffer in buffers {
+                    if outstanding == 0 { onSounding?(true) }
                     outstanding += 1
                     AudioIO.shared.play(buffer) {
                         DispatchQueue.main.async { self.bufferHeard() }
@@ -96,7 +103,9 @@ final class SpeechQueue {
     }
 
     private func bufferHeard() {
-        outstanding = max(0, outstanding - 1)
+        guard outstanding > 0 else { return }
+        outstanding -= 1
+        if outstanding == 0 { onSounding?(false) }
         if outstanding == 0, let drained {
             self.drained = nil
             drained.resume()

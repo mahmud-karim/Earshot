@@ -3,6 +3,8 @@ import UIKit
 
 enum ChatKind: String, Codable {
     case voice, shot, page
+    /// A conversation with the Hermes agent, in the Agent tab.
+    case agent
 }
 
 struct Turn: Codable, Identifiable, Equatable {
@@ -34,6 +36,9 @@ struct Chat: Codable, Identifiable, Equatable {
     var updated = Date()
     var kind: ChatKind = .voice
     var turns: [Turn] = []
+    /// A Hermes run still working on the server for this chat's last question. Its answer is fetched
+    /// when Earshot can reach the server again, even after the app was closed.
+    var pendingRun: String?
 
     var cost: Double { turns.compactMap(\.cost).reduce(0, +) }
     var lastModel: String? { turns.last(where: { !$0.isUser })?.modelLabel }

@@ -169,15 +169,22 @@ final class UploadTranscriber: Transcriber {
     let baseURL: URL
     let apiKey: String?
     let model: String
+    /// Sent when known: skips the server's language detection.
+    let language: String?
+    /// Turns a failed status and its body into a sentence; the generic one fits OpenAI.
+    let describe: (Int, String) -> String
 
     private let lock = NSLock()
     private var samples: [Float] = []
     private var cancelled = false
 
-    init(baseURL: URL, apiKey: String?, model: String) {
+    init(baseURL: URL, apiKey: String?, model: String, language: String? = nil,
+         describe: @escaping (Int, String) -> String = { "Transcription failed. " + SSE.readableError(status: $0, body: $1) }) {
         self.baseURL = baseURL
         self.apiKey = apiKey
         self.model = model
+        self.language = language
+        self.describe = describe
     }
 
     func start() async throws {
@@ -211,6 +218,7 @@ final class UploadTranscriber: Transcriber {
         }
         field("model", model)
         field("response_format", "json")
+        if let language { field("language", language) }
         body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"speech.wav\"\r\nContent-Type: audio/wav\r\n\r\n".data(using: .utf8)!)
         body.append(WAV.encode(recorded, sampleRate: 16_000))
         body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
@@ -225,7 +233,7 @@ final class UploadTranscriber: Transcriber {
         let (data, response) = try await URLSession.shared.upload(for: request, from: body)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else {
-            throw BrainError(message: "Transcription failed. " + SSE.readableError(status: status, body: String(decoding: data, as: UTF8.self)))
+            throw BrainError(message: describe(status, String(decoding: data, as: UTF8.self)))
         }
         let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         return ((object?["text"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

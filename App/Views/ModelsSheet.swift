@@ -6,6 +6,9 @@ enum ModelsRoute: Hashable {
     case openRouterModel, openAIModel, pcModel
     case appleVoices, openAIVoices, elevenLabsVoice, pcVoice
     case onDeviceVoices, myVoice
+    case fluidEars
+    case speechServer, speechServerKey
+    case hermes, hermesKey
 }
 
 /// Brain, ears and voice for the current preset.
@@ -13,6 +16,7 @@ struct ModelsSheet: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var conversation: Conversation
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var fluid = FluidDownload.shared
     @State private var naming = false
     @State private var newName = ""
 
@@ -151,6 +155,19 @@ struct ModelsSheet: View {
                     settings.data.ears = .apple
                 }
                 Hairline()
+                row("Fluid Speech Mini", fluidNote, selected: settings.data.ears == .fluid, route: .fluidEars) {
+                    if FluidDownload.shared.isDownloaded {
+                        settings.data.ears = .fluid
+                    } else {
+                        FluidDownload.shared.start()
+                    }
+                }
+                Hairline()
+                row("Qwen3-ASR on your PC", settings.key(.speechServer) == nil ? "Add the server's key · tap › to set it up" : "Uses your server key · works anywhere",
+                    selected: settings.data.ears == .server, route: .speechServer) {
+                    settings.data.ears = .server
+                }
+                Hairline()
                 row("OpenAI", settings.key(.openAI) == nil ? "Add an OpenAI key in Settings" : "Uses your OpenAI key · \(settings.data.openAITranscribeModel)",
                     selected: settings.data.ears == .openAI) {
                     settings.data.ears = .openAI
@@ -224,6 +241,12 @@ struct ModelsSheet: View {
         }
     }
 
+    private var fluidNote: String {
+        if let progress = fluid.progress { return "Downloading · \(Int(progress * 100))%" }
+        if let failure = fluid.failure { return failure }
+        return fluid.isDownloaded ? "Free · private · on this iPhone · English" : "On this iPhone · tap to get it, " + OnDeviceVoicesPage.size(FluidSpeechMini.approximateBytes)
+    }
+
     private var onDeviceNote: String {
         guard let voice = OnDeviceVoice(settings.data.onDeviceVoice) else { return "Free · private · works offline" }
         return LocalModelStore.shared.isDownloaded(voice.model) ? "Free · private · works offline" : "Download it first"
@@ -265,6 +288,16 @@ struct ModelsSheet: View {
             OnDeviceVoicesPage()
         case .myVoice:
             MyVoicePage()
+        case .fluidEars:
+            FluidEarsPage()
+        case .speechServer:
+            SpeechServerPage()
+        case .speechServerKey:
+            KeyPage(name: .speechServer)
+        case .hermes:
+            HermesPage()
+        case .hermesKey:
+            KeyPage(name: .hermes)
         }
     }
 

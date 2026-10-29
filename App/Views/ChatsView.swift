@@ -11,7 +11,7 @@ struct ChatsView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            PageHeader(title: "Chats", back: { dismiss() }) {
+            PageHeader(title: conversation.isAgent ? "Agent chats" : "Chats", back: { dismiss() }) {
                 Button {
                     conversation.newChat()
                     dismiss()
@@ -33,7 +33,7 @@ struct ChatsView: View {
 
             if filtered.isEmpty {
                 Spacer()
-                Text(store.chats.isEmpty ? "Your chats will show up here." : "No chats match.")
+                Text(search.isEmpty ? "Your chats will show up here." : "No chats match.")
                     .font(.system(size: 15)).foregroundStyle(Theme.muted)
                 Spacer()
             } else {
@@ -81,8 +81,10 @@ struct ChatsView: View {
 
     private var filtered: [Chat] {
         let query = search.trimmingCharacters(in: .whitespaces)
-        guard !query.isEmpty else { return store.chats }
-        return store.chats.filter { chat in
+        // Each tab lists its own chats: Hermes in Agent, everything else in Talk.
+        let mine = store.chats.filter { ($0.kind == .agent) == conversation.isAgent }
+        guard !query.isEmpty else { return mine }
+        return mine.filter { chat in
             chat.title.localizedCaseInsensitiveContains(query)
                 || chat.turns.contains { $0.text.localizedCaseInsensitiveContains(query) }
         }
@@ -133,6 +135,7 @@ struct ChatRow: View {
         case .shot: return "photo"
         case .page: return "globe"
         case .voice: return "mic"
+        case .agent: return "terminal"
         }
     }
 

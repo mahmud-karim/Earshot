@@ -1,5 +1,18 @@
 import Foundation
 
+/// Something the store can download: a folder of its own and the Hugging Face files that fill it.
+public protocol DownloadableModel: Sendable {
+    var folderName: String { get }
+    var displayName: String { get }
+    var sources: [LocalModelSource] { get }
+}
+
+extension LocalVoiceModel: DownloadableModel {
+    public var folderName: String { rawValue }
+    public var displayName: String { info.name }
+    public var sources: [LocalModelSource] { info.sources }
+}
+
 /// Downloads models from Hugging Face into one folder each and remembers which are complete.
 public final class LocalModelStore: @unchecked Sendable {
     public static let shared = LocalModelStore()
@@ -17,20 +30,20 @@ public final class LocalModelStore: @unchecked Sendable {
         }
     }
 
-    public func folder(_ model: LocalVoiceModel) -> URL {
-        root.appendingPathComponent(model.rawValue, isDirectory: true)
+    public func folder<Model: DownloadableModel>(_ model: Model) -> URL {
+        root.appendingPathComponent(model.folderName, isDirectory: true)
     }
 
-    private func marker(_ model: LocalVoiceModel) -> URL {
+    private func marker<Model: DownloadableModel>(_ model: Model) -> URL {
         folder(model).appendingPathComponent(".complete")
     }
 
-    public func isDownloaded(_ model: LocalVoiceModel) -> Bool {
+    public func isDownloaded<Model: DownloadableModel>(_ model: Model) -> Bool {
         FileManager.default.fileExists(atPath: marker(model).path)
     }
 
     /// Bytes on disk, for the storage line in Settings.
-    public func bytesOnDisk(_ model: LocalVoiceModel) -> Int64 {
+    public func bytesOnDisk<Model: DownloadableModel>(_ model: Model) -> Int64 {
         guard let walker = FileManager.default.enumerator(at: folder(model), includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
         var total: Int64 = 0
         for case let url as URL in walker {
@@ -39,7 +52,7 @@ public final class LocalModelStore: @unchecked Sendable {
         return total
     }
 
-    public func delete(_ model: LocalVoiceModel) throws {
+    public func delete<Model: DownloadableModel>(_ model: Model) throws {
         if FileManager.default.fileExists(atPath: folder(model).path) {
             try FileManager.default.removeItem(at: folder(model))
         }
@@ -52,9 +65,9 @@ public final class LocalModelStore: @unchecked Sendable {
     }
 
     /// The files a model needs, with their sizes.
-    public func remoteFiles(_ model: LocalVoiceModel) async throws -> [RemoteFile] {
+    public func remoteFiles<Model: DownloadableModel>(_ model: Model) async throws -> [RemoteFile] {
         var result: [RemoteFile] = []
-        for source in model.info.sources {
+        for source in model.sources {
             let url = URL(string: "https://huggingface.co/api/models/\(source.repo)/tree/\(source.revision)?recursive=true")!
             let (data, response) = try await URLSession.shared.data(from: url)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else {
@@ -70,12 +83,12 @@ public final class LocalModelStore: @unchecked Sendable {
                 result.append(RemoteFile(source: source, path: path, size: size))
             }
         }
-        guard !result.isEmpty else { throw LocalVoiceError("No files were found for \(model.info.name).") }
+        guard !result.isEmpty else { throw LocalVoiceError("No files were found for \(model.displayName).") }
         return result
     }
 
     /// Fetches every missing file. `progress` gets bytes done and bytes in all.
-    public func download(_ model: LocalVoiceModel, progress: @escaping @Sendable (Int64, Int64) -> Void) async throws {
+    public func download<Model: DownloadableModel>(_ model: Model, progress: @escaping @Sendable (Int64, Int64) -> Void) async throws {
         if isDownloaded(model) { return }
         let files = try await remoteFiles(model)
         let total = files.reduce(0) { $0 + $1.size }

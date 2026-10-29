@@ -16,6 +16,11 @@ struct SettingsData: Codable, Equatable {
     var effortByModel: [String: Effort] = [:]
     var openAITranscribeModel = "gpt-4o-mini-transcribe"
     var pcTranscribeModel = "Systran/faster-whisper-small"
+    /// The speech-to-text server on the PC: Qwen3-ASR behind an API-key gateway, reachable from anywhere.
+    var speechServerURL = "https://desktop-7e81618.taila32dd7.ts.net:10000/stt/v1"
+    var speechServerModel = "qwen3-asr-1.7b"
+    /// The Hermes agent's API server on shopto-cloud, published through Tailscale Funnel.
+    var hermesURL = "https://shopto-cloud.taila32dd7.ts.net:10000/hermes/v1"
     var openAIVoiceModel = "gpt-4o-mini-tts"
     var elevenLabsModel = "eleven_flash_v2_5"
     var pcVoiceModel = "kokoro"
@@ -37,16 +42,21 @@ struct SettingsData: Codable, Equatable {
     /// Claude may search the web and read pages to answer.
     var webSearch = true
 
+    /// Drops speech that doesn't match the "My voice" recording's voiceprint before it is sent.
+    var voiceFilter = false
+    var voiceFilterLevel: VoiceFilterLevel = .normal
+
     var handsFree = false
     var interruptByTalking = true
     var pauseSeconds = 1.2
     var liveCaptions = true
-    var listenOnOpen = true
+    /// Starts listening when the Action Button shortcut opens Earshot. Opening it yourself never does.
+    var listenOnActionButton = true
     var monthlyBudget = 100.0
 }
 
 enum KeyName: String, CaseIterable, Identifiable {
-    case anthropic, openRouter, openAI, elevenLabs
+    case anthropic, openRouter, openAI, elevenLabs, speechServer, hermes
 
     var id: String { rawValue }
 
@@ -56,6 +66,8 @@ enum KeyName: String, CaseIterable, Identifiable {
         case .openRouter: return "OpenRouter"
         case .openAI: return "OpenAI"
         case .elevenLabs: return "ElevenLabs"
+        case .speechServer: return "Speech server"
+        case .hermes: return "Hermes"
         }
     }
 
@@ -65,6 +77,8 @@ enum KeyName: String, CaseIterable, Identifiable {
         case .openRouter: return "From openrouter.ai/keys, starts with sk-or-"
         case .openAI: return "From platform.openai.com, starts with sk-"
         case .elevenLabs: return "From elevenlabs.io, under API keys"
+        case .speechServer: return "On your PC, in the STT-Server folder, run keys.ps1 create \"Earshot iPhone\"; it starts with sk-stt-"
+        case .hermes: return "API_SERVER_KEY in ~/.hermes/.env on shopto-cloud; it starts with hk-"
         }
     }
 }

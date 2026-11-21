@@ -113,6 +113,8 @@ final class Conversation: ObservableObject {
     @Published private(set) var replyModel = ""
     /// The earlier answer being read out again, if any.
     @Published private(set) var replaying: UUID?
+    /// Text the user pasted is being read out loud.
+    @Published private(set) var readingAloud = false
     /// The reply is waiting on a web search or a page.
     @Published private(set) var searching = false
     /// Pages the reply in progress draws on.
@@ -728,6 +730,7 @@ final class Conversation: ObservableObject {
         speech?.stop()
         speech = nil
         replaying = nil
+        readingAloud = false
         searching = false
         working = nil
         approval = nil
@@ -754,6 +757,18 @@ final class Conversation: ObservableObject {
     /// reply, so the stop button and talking over it work the same; it never starts listening after.
     func replay(_ turn: Turn) {
         guard phase == .idle, !turn.text.isEmpty else { return }
+        speakAloud(turn.text, turnID: turn.id)
+    }
+
+    /// Reads text the user pasted or typed out loud, in the preset's voice. Stop with `stopSpeaking()`.
+    func readAloud(_ text: String) {
+        guard phase == .idle, text.rangeOfCharacter(from: .alphanumerics) != nil else { return }
+        speakAloud(text, turnID: nil)
+        if speech != nil { readingAloud = true }
+    }
+
+    /// Plays text in the preset's voice like a reply, without adding anything to the chat.
+    private func speakAloud(_ text: String, turnID: UUID?) {
         previewQueue?.stop()
         previewQueue = nil
         do {
@@ -773,6 +788,7 @@ final class Conversation: ObservableObject {
             guard let self, self.speech === queue else { return }
             self.speech = nil
             self.replaying = nil
+            self.readingAloud = false
             if self.phase == .speaking || self.phase == .thinking { self.phase = .idle }
             self.stopAudioIfIdle()
         }
@@ -782,12 +798,24 @@ final class Conversation: ObservableObject {
         }
         queue.onError = { [weak self] message in self?.error = message }
         speech = queue
-        replaying = turn.id
-        spokenText = turn.text
+        replaying = turnID
+        spokenText = text
         phase = .thinking
         var splitter = SentenceSplitter()
-        for sentence in splitter.push(turn.text) + splitter.flush() { queue.enqueue(sentence) }
-        queue.finishInput()
+        let sentences = splitter.push(text) + splitter.flush()
+        // A few sentences ahead at a time: a long pasted text would otherwise ask the voice for
+        // every sentence at once.
+        Task { [weak self] in
+            for sentence in sentences {
+                while queue.backlog >= 3 {
+                    guard self?.speech === queue else { return }
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+                guard self?.speech === queue else { return }
+                queue.enqueue(sentence)
+            }
+            queue.finishInput()
+        }
     }
 
     // MARK: - Talking over a reply

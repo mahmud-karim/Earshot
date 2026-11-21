@@ -10,15 +10,23 @@ struct TalkView: View {
     let openModels: () -> Void
 
     @State private var typing = false
+    @State private var readingAloud = false
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                RoundIcon(systemImage: "clock", label: "Chats", action: openChats)
+                HStack(spacing: 0) {
+                    RoundIcon(systemImage: "clock", label: "Chats", action: openChats)
+                    RoundIcon(systemImage: "text.bubble", label: "Read text aloud") { readingAloud = true }
+                }
                 Spacer()
                 ModelPill(action: openModels)
                 Spacer()
-                RoundIcon(systemImage: "slider.horizontal.3", label: "Settings", action: openSettings)
+                HStack(spacing: 0) {
+                    // Keeps the model pill centred.
+                    Color.clear.frame(width: 44, height: 44)
+                    RoundIcon(systemImage: "slider.horizontal.3", label: "Settings", action: openSettings)
+                }
             }
             .frame(height: 44)
 
@@ -60,6 +68,7 @@ struct TalkView: View {
         .padding(.horizontal, 20)
         .padding(.top, 8)
         .padding(.bottom, 12)
+        .sheet(isPresented: $readingAloud) { ReadAloudSheet() }
     }
 }
 

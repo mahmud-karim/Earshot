@@ -24,6 +24,8 @@ final class SpeechQueue {
     private var loop: Task<Void, Never>?
     private var started = false
     private var stopped = false
+    /// Sentences queued and not yet heard to the end, so a long text can be fed a few at a time.
+    private(set) var backlog = 0
 
     init(synthesizer: Synthesizer) {
         self.synthesizer = synthesizer
@@ -33,6 +35,7 @@ final class SpeechQueue {
         guard !stopped else { return }
         let text = SpeechText.clean(sentence)
         guard text.rangeOfCharacter(from: .alphanumerics) != nil else { return }
+        backlog += 1
         let synthesizer = self.synthesizer
         pending.append(Task { try await synthesizer.audio(for: text) })
         if loop == nil {
@@ -51,6 +54,7 @@ final class SpeechQueue {
         stopped = true
         pending.forEach { $0.cancel() }
         pending.removeAll()
+        backlog = 0
         loop?.cancel()
         AudioIO.shared.stopPlayback()
         if outstanding > 0 {
@@ -80,15 +84,21 @@ final class SpeechQueue {
                     started = true
                     onStart?()
                 }
+                if buffers.isEmpty { sentenceHeard() }
                 // Scheduled at once rather than one by one, so there is no gap between buffers.
-                for buffer in buffers {
+                for (index, buffer) in buffers.enumerated() {
+                    let last = index == buffers.count - 1
                     if outstanding == 0 { onSounding?(true) }
                     outstanding += 1
                     AudioIO.shared.play(buffer) {
-                        DispatchQueue.main.async { self.bufferHeard() }
+                        DispatchQueue.main.async {
+                            self.bufferHeard()
+                            if last { self.sentenceHeard() }
+                        }
                     }
                 }
             } catch {
+                sentenceHeard()
                 if !stopped, !(error is CancellationError) {
                     onError?(error.localizedDescription)
                 }
@@ -110,6 +120,10 @@ final class SpeechQueue {
             self.drained = nil
             drained.resume()
         }
+    }
+
+    private func sentenceHeard() {
+        if backlog > 0 { backlog -= 1 }
     }
 
     private func finish() {

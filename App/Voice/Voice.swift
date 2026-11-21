@@ -17,9 +17,19 @@ final class SpeechQueue {
     /// True while sound is coming out, false in the gaps while the next sentence is still being made.
     var onSounding: ((Bool) -> Void)?
     var onError: ((String) -> Void)?
+    /// The audio for a tagged sentence is being made; nil once it is ready.
+    var onPreparing: ((Int?) -> Void)?
+    /// A tagged sentence has started playing, with how long its audio lasts.
+    var onSentenceStart: ((Int, TimeInterval) -> Void)?
+    /// A tagged sentence has been heard to the end, or was skipped.
+    var onSentenceEnd: ((Int) -> Void)?
 
     private let synthesizer: Synthesizer
-    private var pending: [Task<[AVAudioPCMBuffer], Error>] = []
+    private var pending: [(task: Task<[AVAudioPCMBuffer], Error>, tag: Int?)] = []
+    /// Sentences scheduled behind the one playing, in order, so each start is reported when the
+    /// one before it has actually been heard.
+    private var waitingToPlay: [(tag: Int?, duration: TimeInterval)] = []
+    private var sentencePlaying = false
     private var inputFinished = false
     private var loop: Task<Void, Never>?
     private var started = false
@@ -31,13 +41,14 @@ final class SpeechQueue {
         self.synthesizer = synthesizer
     }
 
-    func enqueue(_ sentence: String) {
+    /// Queues a sentence. A `tag` reports when its audio is being made, starts and ends.
+    func enqueue(_ sentence: String, tag: Int? = nil) {
         guard !stopped else { return }
         let text = SpeechText.clean(sentence)
         guard text.rangeOfCharacter(from: .alphanumerics) != nil else { return }
         backlog += 1
         let synthesizer = self.synthesizer
-        pending.append(Task { try await synthesizer.audio(for: text) })
+        pending.append((Task { try await synthesizer.audio(for: text) }, tag))
         if loop == nil {
             loop = Task { await self.run() }
         }
@@ -52,9 +63,11 @@ final class SpeechQueue {
 
     func stop() {
         stopped = true
-        pending.forEach { $0.cancel() }
+        pending.forEach { $0.task.cancel() }
         pending.removeAll()
         backlog = 0
+        waitingToPlay.removeAll()
+        sentencePlaying = false
         loop?.cancel()
         AudioIO.shared.stopPlayback()
         if outstanding > 0 {
@@ -77,14 +90,27 @@ final class SpeechQueue {
                 continue
             }
             let next = pending.removeFirst()
+            if next.tag != nil { onPreparing?(next.tag) }
             do {
-                let buffers = try await next.value
+                let buffers = try await next.task.value
                 guard !stopped else { break }
+                if next.tag != nil { onPreparing?(nil) }
                 if !started && !buffers.isEmpty {
                     started = true
                     onStart?()
                 }
-                if buffers.isEmpty { sentenceHeard() }
+                if buffers.isEmpty {
+                    sentenceHeard()
+                    if let tag = next.tag { onSentenceEnd?(tag) }
+                    continue
+                }
+                let duration = buffers.reduce(0.0) { $0 + Double($1.frameLength) / max($1.format.sampleRate, 1) }
+                if sentencePlaying {
+                    waitingToPlay.append((next.tag, duration))
+                } else {
+                    sentencePlaying = true
+                    if let tag = next.tag { onSentenceStart?(tag, duration) }
+                }
                 // Scheduled at once rather than one by one, so there is no gap between buffers.
                 for (index, buffer) in buffers.enumerated() {
                     let last = index == buffers.count - 1
@@ -93,12 +119,14 @@ final class SpeechQueue {
                     AudioIO.shared.play(buffer) {
                         DispatchQueue.main.async {
                             self.bufferHeard()
-                            if last { self.sentenceHeard() }
+                            if last { self.sentencePlayed(next.tag) }
                         }
                     }
                 }
             } catch {
+                if next.tag != nil { onPreparing?(nil) }
                 sentenceHeard()
+                if let tag = next.tag, !stopped { onSentenceEnd?(tag) }
                 if !stopped, !(error is CancellationError) {
                     onError?(error.localizedDescription)
                 }
@@ -124,6 +152,19 @@ final class SpeechQueue {
 
     private func sentenceHeard() {
         if backlog > 0 { backlog -= 1 }
+    }
+
+    /// A scheduled sentence has been heard: the next one in line starts now.
+    private func sentencePlayed(_ tag: Int?) {
+        guard !stopped else { return }
+        sentenceHeard()
+        if let tag { onSentenceEnd?(tag) }
+        if waitingToPlay.isEmpty {
+            sentencePlaying = false
+        } else {
+            let next = waitingToPlay.removeFirst()
+            if let tag = next.tag { onSentenceStart?(tag, next.duration) }
+        }
     }
 
     private func finish() {

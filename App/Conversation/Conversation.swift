@@ -113,6 +113,9 @@ final class Conversation: ObservableObject {
     @Published private(set) var replyModel = ""
     /// The earlier answer being read out again, if any.
     @Published private(set) var replaying: UUID?
+    /// Text the user pasted, while it is being read out loud.
+    @Published private(set) var readAloudSession: ReadAloudSession?
+    var readingAloud: Bool { readAloudSession != nil }
     /// The reply is waiting on a web search or a page.
     @Published private(set) var searching = false
     /// Pages the reply in progress draws on.
@@ -728,6 +731,7 @@ final class Conversation: ObservableObject {
         speech?.stop()
         speech = nil
         replaying = nil
+        readAloudSession = nil
         searching = false
         working = nil
         approval = nil
@@ -754,6 +758,17 @@ final class Conversation: ObservableObject {
     /// reply, so the stop button and talking over it work the same; it never starts listening after.
     func replay(_ turn: Turn) {
         guard phase == .idle, !turn.text.isEmpty else { return }
+        speakAloud(turn.text, turnID: turn.id)
+    }
+
+    /// Reads text the user pasted or typed out loud, in the preset's voice. Stop with `stopSpeaking()`.
+    func readAloud(_ text: String) {
+        guard phase == .idle, text.rangeOfCharacter(from: .alphanumerics) != nil else { return }
+        speakAloud(text, turnID: nil)
+    }
+
+    /// Plays text in the preset's voice like a reply, without adding anything to the chat.
+    private func speakAloud(_ text: String, turnID: UUID?) {
         previewQueue?.stop()
         previewQueue = nil
         do {
@@ -773,6 +788,7 @@ final class Conversation: ObservableObject {
             guard let self, self.speech === queue else { return }
             self.speech = nil
             self.replaying = nil
+            self.readAloudSession = nil
             if self.phase == .speaking || self.phase == .thinking { self.phase = .idle }
             self.stopAudioIfIdle()
         }
@@ -782,12 +798,47 @@ final class Conversation: ObservableObject {
         }
         queue.onError = { [weak self] message in self?.error = message }
         speech = queue
-        replaying = turn.id
-        spokenText = turn.text
+        replaying = turnID
+        spokenText = text
         phase = .thinking
+        // A reply's fenced blocks are drafts shown on screen, not spoken; pasted text is read in full,
+        // so its fence lines (with their language tags) and any other ``` are dropped instead.
+        let spoken = turnID == nil
+            ? text.replacingOccurrences(of: #"(?m)^[ \t]*```[^\n]*$"#, with: "", options: .regularExpression)
+                .replacingOccurrences(of: "```", with: "")
+            : text
         var splitter = SentenceSplitter()
-        for sentence in splitter.push(turn.text) + splitter.flush() { queue.enqueue(sentence) }
-        queue.finishInput()
+        let sentences = splitter.push(spoken) + splitter.flush()
+        // Pasted text shows on screen with the word being said lit up.
+        let session = turnID == nil ? ReadAloudSession(text: spoken, sentences: sentences, voiceName: voiceName(settings.preset.voice)) : nil
+        if let session {
+            queue.onPreparing = { [weak self, weak session] tag in
+                guard self?.speech === queue else { return }
+                session?.making = tag
+            }
+            queue.onSentenceStart = { [weak self, weak session] tag, duration in
+                guard self?.speech === queue else { return }
+                session?.started(tag, duration: duration)
+            }
+            queue.onSentenceEnd = { [weak self, weak session] tag in
+                guard self?.speech === queue else { return }
+                session?.ended(tag)
+            }
+        }
+        readAloudSession = session
+        // A few sentences ahead at a time: a long pasted text would otherwise ask the voice for
+        // every sentence at once.
+        Task { [weak self] in
+            for (index, sentence) in sentences.enumerated() {
+                while queue.backlog >= 3 {
+                    guard self?.speech === queue else { return }
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+                guard self?.speech === queue else { return }
+                queue.enqueue(sentence, tag: index)
+            }
+            queue.finishInput()
+        }
     }
 
     // MARK: - Talking over a reply
@@ -1158,6 +1209,17 @@ final class Conversation: ObservableObject {
         }
         error = "That voice isn't set up yet, so Apple's voice is speaking instead."
         return AppleSynthesizer(identifier: "")
+    }
+
+    /// The voice as Read aloud's status line names it.
+    private func voiceName(_ choice: VoiceChoice) -> String {
+        switch choice.kind {
+        case .apple: return "Apple's voice"
+        case .openAI: return "OpenAI"
+        case .elevenLabs: return "ElevenLabs"
+        case .pc: return "Kokoro on your PC"
+        case .onDevice: return (OnDeviceVoice(choice.voice)?.model.info.name ?? "the voice") + " on your iPhone"
+        }
     }
 
     static func title(from text: String) -> String {
